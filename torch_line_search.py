@@ -104,7 +104,7 @@ def _strong_wolfe(obj_func,
         bracket = [0, t]
         bracket_f = [f, f_new]
         bracket_g = [g, g_new]
-
+    #############################################################
     # zoom phase: we now have a point satisfying the criteria, or
     # a bracket around it. We refine the bracket until we find the
     # exact point satisfying the criteria
@@ -173,14 +173,10 @@ def _strong_wolfe(obj_func,
             bracket_gtd[low_pos] = gtd_new
 
     # return stuff
-    try:
-        t = bracket[low_pos]
-    except Exception as e:
-        print(e)
-        print(bracket)
-        print(low_pos)
-        # print(t)
+    if len(bracket) == 1:
+        return bracket_f[0], bracket_g[0], bracket[0], ls_func_evals
 
+    t = bracket[low_pos]
     f_new = bracket_f[low_pos]
     g_new = bracket_g[low_pos]
     return f_new, g_new, t, ls_func_evals

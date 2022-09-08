@@ -129,7 +129,7 @@ def generate_adv_images(attack_name, model, images, labels, epsilon, Iterations,
             logits = model(image)
             return -logits[0][label]
 
-        res1 = minimize(func, x0.detach().clone(), method='bfgs', max_iter=10, tol=1e-5, disp=True)
+        res1 = minimize(func, x0.detach().clone(), method='bfgs', max_iter=14, tol=1e-5, disp=True)
         return res1.x
     atk = generate_attack_method(attack_name, model, epsilon, Iterations, Momentum)
     images_under_attack = atk(images, labels)
