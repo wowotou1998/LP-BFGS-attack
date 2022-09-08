@@ -18,7 +18,7 @@ def _cubic_interpolate(x1, f1, g1, x2, f2, g2, bounds=None):
     #   min_pos = x2 - (x2 - x1)*((g2 + d2 - d1)/(g2 - g1 + 2*d2));
     #   t_new = min(max(min_pos,xmin_bound),xmax_bound);
     d1 = g1 + g2 - 3 * (f1 - f2) / (x1 - x2)
-    d2_square = d1**2 - g1 * g2
+    d2_square = d1 ** 2 - g1 * g2
     if d2_square >= 0:
         d2 = d2_square.sqrt()
         if x1 <= x2:
@@ -173,7 +173,14 @@ def _strong_wolfe(obj_func,
             bracket_gtd[low_pos] = gtd_new
 
     # return stuff
-    t = bracket[low_pos]
+    try:
+        t = bracket[low_pos]
+    except Exception as e:
+        print(e)
+        print(bracket)
+        print(low_pos)
+        # print(t)
+
     f_new = bracket_f[low_pos]
     g_new = bracket_g[low_pos]
     return f_new, g_new, t, ls_func_evals

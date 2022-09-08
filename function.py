@@ -14,6 +14,7 @@ from torch.optim import Optimizer
 
 class LinearOperator:
     """A generic linear operator to use with Minimizer"""
+
     def __init__(self, matvec, shape, dtype=torch.float, device=None):
         self.rmv = matvec
         self.mv = matvec
@@ -47,6 +48,7 @@ class Minimizer(Optimizer):
         :func:`torchmin.minimize()`.
 
     """
+
     def __init__(self,
                  params,
                  method='bfgs',
@@ -111,7 +113,7 @@ class Minimizer(Optimizer):
         offset = 0
         for p in self._params:
             numel = p.numel()
-            p.copy_(value[offset:offset+numel].view_as(p))
+            p.copy_(value[offset:offset + numel].view_as(p))
             offset += numel
         assert offset == self._numel()
 
@@ -130,6 +132,7 @@ class Minimizer(Optimizer):
         hess = None
         if self._hessp or self._hess:
             grad_accum = grad.detach().clone()
+
             def hvp(v):
                 assert v.shape == grad.shape
                 grad.backward(gradient=v, retain_graph=True)
@@ -190,22 +193,25 @@ class Minimizer(Optimizer):
 
         # overwrite closure
         closure_ = closure
+
         def closure():
             self._nfev[0] += 1
             return closure_()
+
         self._closure = closure
 
         # get initial value
         x0 = self._gather_flat_param()
 
         # perform parameter update
-        kwargs = {k:v for k,v in self.param_groups[0].items() if k != 'params'}
+        kwargs = {k: v for k, v in self.param_groups[0].items() if k != 'params'}
         self._result = minimize(self, x0, **kwargs)
 
         # set final value
         self._set_flat_param(self._result.x)
 
         return self._result.fun
+
 
 # scalar function result (value)
 # 定义一个namedtuple类型 sf_value，并包含'f', 'grad', 'hessp', 'hess'属性. 这个tuple包含了一系列有关于函数f在x处的各种数值
@@ -271,10 +277,15 @@ class ScalarFunction(object):
     """
 
     def __new__(cls, fun, x_shape, hessp=False, hess=False, twice_diffable=True):
-        if isinstance(fun, Minimizer):
-            assert fun._hessp == hessp
-            assert fun._hess == hess
-            return fun
+        # 一般的函数一般不会是 Minimizer 类型,
+        # 所以我觉得在我的代码里这一块初始化的代码应该用不到
+        # 因此 __new__方法几乎不需要显性定义, 可以注释掉这一块的代码
+        # if isinstance(fun, Minimizer):
+        #     assert fun._hessp == hessp
+        #     assert fun._hess == hess
+        #     return fun
+        # 重写 __new__方法一定要 return super().__new__(cls)，
+        # 否则python解释器得不到分配的内存空间的对象引用，就不会调用对象的初始化方法，不会把对象的引用传递到__init__方法中的self中。
         return super(ScalarFunction, cls).__new__(cls)
 
     def __init__(self, fun, x_shape, hessp=False, hess=False, twice_diffable=True):

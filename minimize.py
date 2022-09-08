@@ -86,12 +86,14 @@ def minimize(
         return _minimize_bfgs(fun, x0, **options)
     elif method == 'l-bfgs':
         return _minimize_lbfgs(fun, x0, **options)
+    elif method == 'newton-exact':
+        return _minimize_newton_exact(fun, x0, **options)
+
+
     elif method == 'cg':
         return _minimize_cg(fun, x0, **options)
     elif method == 'newton-cg':
         return _minimize_newton_cg(fun, x0, **options)
-    elif method == 'newton-exact':
-        return _minimize_newton_exact(fun, x0, **options)
     elif method == 'dogleg':
         return _minimize_dogleg(fun, x0, **options)
     elif method == 'trust-ncg':

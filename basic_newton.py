@@ -112,6 +112,7 @@ def _minimize_newton_exact(
         if info == 0:
             d = torch.cholesky_solve(g.neg().unsqueeze(1), L).squeeze(1)
         else:
+            print('encountered not positive hessian matrix')
             nfail += 1
             if handle_npd == 'lu':
                 d = torch.linalg.solve(hess, g.neg())
