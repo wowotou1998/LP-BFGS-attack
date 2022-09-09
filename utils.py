@@ -200,7 +200,7 @@ def save_model_accuracy_rate(dict, model_name):
 
 def save_model_results(file_name, head, rows):
     import csv, datetime
-    path = '../Checkpoint/%s_%s.csv' % (file_name, datetime.datetime.now().strftime("%Y_%m_%d_%H_%M"))
+    path = './Checkpoint/%s_%s.csv' % (file_name, datetime.datetime.now().strftime("%Y_%m_%d_%H_%M"))
     with open(path, 'w', encoding='utf-8', newline='') as f:
         writer = csv.writer(f)
         # 写入一行数据

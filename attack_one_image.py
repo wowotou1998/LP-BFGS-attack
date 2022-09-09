@@ -13,9 +13,8 @@ import os
 import torch.nn.functional as F
 import os
 from minimize import minimize
-
-
-# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+import torch.nn as nn
+import os
 
 
 def show_one_image(images, title):
@@ -25,6 +24,26 @@ def show_one_image(images, title):
     # print(images.detach().numpy()[0].shape)
     plt.imshow(images)
     plt.title(title)
+    plt.show()
+
+
+def show_two_image(images, adv_images, titles):
+    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+    # plt.figure()
+    print(images.shape)
+
+    # image = images.cpu().detach().numpy()[0].transpose(1, 2, 0)
+    # plt.imshow(image)
+    # plt.title(title)
+    # plt.show()
+
+    fig, axes = plt.subplots(1, 2, figsize=(4, 2))
+    for i, x in enumerate((images, adv_images)):
+        image = x.cpu().detach().numpy()[0].transpose(1, 2, 0)
+        axes[i].imshow(image, cmap='gray')
+        axes[i].set_xticks([])
+        axes[i].set_yticks([])
+        axes[i].set_title(titles[i])
     plt.show()
 
 
@@ -121,16 +140,51 @@ def load_dataset(dataset, batch_size, is_shuffle=False):
     return test_loader, test_dataset_size
 
 
+def tanh_space(x):
+    return 1 / 2 * (torch.tanh(x) + 1)
+
+
+def inverse_tanh_space(x):
+    # torch.atanh is only for torch >= 1.7.0
+    def atanh(x):
+        return 0.5 * torch.log((1 + x) / (1 - x))
+
+    return atanh(x * 2 - 1)
+
+
 def generate_adv_images(attack_name, model, images, labels, epsilon, Iterations, Momentum):
     if attack_name == 'second-order':
         x0 = images[0:1]
+        x0[x0 == 0.0] = 1. / 255 * 0.1
+        x0[x0 == 1.0] = 1. - 1. / 255 * 0.1
+        w = inverse_tanh_space(x0)
 
-        def func(image, label=labels[0].detach().clone()):
-            logits = model(image)
-            return -logits[0][label]
+        # def func(image, label=labels[0].detach().clone()):
+        #     logits = model(tanh_space(image))
+        #     return -logits[0][label]
+        MSELoss = nn.MSELoss(reduction='none')
+        Flatten = nn.Flatten()
 
-        res1 = minimize(func, x0.detach().clone(), method='bfgs', max_iter=14, tol=1e-5, disp=True)
-        return res1.x
+        def func(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            kappa = 0
+            c = 10
+            adv_images = tanh_space(w)
+
+            current_L2 = MSELoss(Flatten(adv_images),
+                                 Flatten(init_images)).sum(dim=1)
+            L2_loss = current_L2.sum()
+
+            outputs = model(adv_images)
+            one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
+            i, _ = torch.max((1 - one_hot_labels) * outputs, dim=1)  # get the second largest logit
+            j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit
+            out1 = torch.clamp((j - i), min=-kappa).sum()
+            cost = L2_loss + c * out1
+            return cost
+
+        res1 = minimize(func, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=True)
+        adv_image = tanh_space(res1.x)
+        return adv_image
     atk = generate_attack_method(attack_name, model, epsilon, Iterations, Momentum)
     images_under_attack = atk(images, labels)
     return images_under_attack
@@ -201,7 +255,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, Ep
         for idx, attack_name in enumerate(attack_method_set):
             images_under_attack = generate_adv_images(attack_name, model, images, labels, epsilon, Iterations, Momentum)
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
-            print(predict[0]==labels[0])
+            print(predict[0] == labels[0])
             # 记录每一个攻击方法在每一批次的成功个数
             attack_success_num[idx] += (labels != predict).sum().item()
 
@@ -218,11 +272,13 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, Ep
 
             if epoch_num == 1:
                 print('predict_correct_element_num: ', predict_correct_index.nelement())
+                titles = (str(labels[0].item()), str(predict[0].item()))
                 # show_one_image(images, 'image_after_' + attack_name)
-
+                show_two_image(images, images_under_attack, titles)
+                break
         sample_attacked += labels.shape[0]
 
-        # break
+        break
 
     attack_success_rate = (attack_success_num / sample_attacked) * 100.
     attack_success_confidence_ave = (attack_success_confidence / attack_success_num)
@@ -241,7 +297,7 @@ def attack_many_model(dataset, model_name_set, attack_method_set, batch_size, wo
                       Momentum):
     lab_result_head = ['model', 'model acc', 'Epsilon', 'Iterations', 'Momentum'] + attack_method_set
     lab_result_content = []
-    test_loader, test_dataset_size = load_dataset(dataset, batch_size)
+    test_loader, test_dataset_size = load_dataset(dataset, batch_size, is_shuffle=True)
     for mode_name in model_name_set:
         model, model_acc = load_model_args(mode_name)
         for Epsilon in Epsilon_set:
