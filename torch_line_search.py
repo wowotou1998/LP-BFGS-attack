@@ -173,8 +173,8 @@ def _strong_wolfe(obj_func,
             bracket_gtd[low_pos] = gtd_new
 
     # return stuff
-    if len(bracket) == 1:
-        return bracket_f[0], bracket_g[0], bracket[0], ls_func_evals
+    # if len(bracket) == 1:
+    #     return bracket_f[0], bracket_g[0], bracket[0], ls_func_evals
 
     t = bracket[low_pos]
     f_new = bracket_f[low_pos]

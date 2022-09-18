@@ -183,6 +183,7 @@ def generate_adv_images(attack_name, model, images, labels, epsilon, Iterations,
             return cost
 
         res1 = minimize(func, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=True)
+        # res1 = minimize(func, w.detach().clone(), method='newton-exact', max_iter=10, tol=1e-5, disp=True)
         adv_image = tanh_space(res1.x)
         return adv_image
     atk = generate_attack_method(attack_name, model, epsilon, Iterations, Momentum)

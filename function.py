@@ -298,6 +298,12 @@ class ScalarFunction(object):
         self.nfev = 0
 
     def fun(self, x):
+        """
+        由于二阶算法里 优化变量无论初始是怎样的，都会一律拍扁成向量
+        但是神经网络可能对数据要求的是一个高维tensor，
+        因此在丢到神经网络之前， 我们需要对优化变量的形状进行重新 resize
+        """
+
         if x.shape != self._x_shape:
             x = x.view(self._x_shape)
         f = self._fun(x)

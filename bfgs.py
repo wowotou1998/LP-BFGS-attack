@@ -167,6 +167,10 @@ def _minimize_bfgs_core(
     closure = sf.closure
     if line_search == 'strong-wolfe':
         dir_evaluate = sf.dir_evaluate
+    """
+    这里对初始 x0 进行了拍平操作，view(-1) 的作用和flatten（）操作的效果是一样的，
+    在整个二阶优化算法中， 无论初始数据是怎么样，这里一律拍扁成一个向量
+    """
 
     # compute initial f(x) and f'(x)
     x = x0.detach().view(-1).clone(memory_format=torch.contiguous_format)
