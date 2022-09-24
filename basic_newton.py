@@ -106,13 +106,14 @@ def _minimize_newton_exact(
         # ===================================================
 
         # Compute search direction with Cholesky solve
-        # 如果 info==0, 那么 hessian矩阵就是半正定矩阵, 且hessian = L*L^T, L是一个下三角矩阵
+        # 如果 info==0, 那么 hessian 矩阵就是半正定矩阵, 且 hessian = L*L^T, L是一个下三角矩阵
         L, info = torch.linalg.cholesky_ex(hess)
 
         if info == 0:
+            # 使用 cholesky 分解得到的 L， 计算方程组 LL^T d = - g, 其中 d 是我们想要求解的变量
             d = torch.cholesky_solve(g.neg().unsqueeze(1), L).squeeze(1)
         else:
-            print('encountered not positive hessian matrix')
+            # print('encountered not positive hessian matrix')
             nfail += 1
             if handle_npd == 'lu':
                 d = torch.linalg.solve(hess, g.neg())

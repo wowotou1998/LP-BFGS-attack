@@ -15,6 +15,11 @@ import os
 from minimize import minimize
 import torch.nn as nn
 import os
+# prepare your pytorch model as "model"
+# prepare a batch of data and label as "cln_data" and "true_label"
+# ...
+
+from advertorch.attacks import LBFGSAttack
 
 
 def show_one_image(images, title):
@@ -152,7 +157,7 @@ def inverse_tanh_space(x):
     return atanh(x * 2 - 1)
 
 
-def generate_adv_images(attack_name, model, images, labels, epsilon, Iterations, Momentum):
+def generate_adv_images(attack_name, model, images, labels, options):
     if attack_name == 'second-order':
         x0 = images[0:1]
         x0[x0 == 0.0] = 1. / 255 * 0.1
@@ -162,12 +167,13 @@ def generate_adv_images(attack_name, model, images, labels, epsilon, Iterations,
         # def func(image, label=labels[0].detach().clone()):
         #     logits = model(tanh_space(image))
         #     return -logits[0][label]
+        CELoss = nn.CrossEntropyLoss()
         MSELoss = nn.MSELoss(reduction='none')
         Flatten = nn.Flatten()
 
-        def func(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
+        def cw_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
             kappa = 0
-            c = 10
+            c = 1
             adv_images = tanh_space(w)
 
             current_L2 = MSELoss(Flatten(adv_images),
@@ -182,22 +188,59 @@ def generate_adv_images(attack_name, model, images, labels, epsilon, Iterations,
             cost = L2_loss + c * out1
             return cost
 
-        res1 = minimize(func, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=True)
-        # res1 = minimize(func, w.detach().clone(), method='newton-exact', max_iter=10, tol=1e-5, disp=True)
-        adv_image = tanh_space(res1.x)
+        def cw_log_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            kappa = 0
+            c = 10000
+            adv_images = tanh_space(w)
+
+            current_L2 = MSELoss(Flatten(adv_images),
+                                 Flatten(init_images)).sum(dim=1)
+            L2_loss = current_L2.sum()
+
+            outputs = model(adv_images)
+            one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
+            i, _ = torch.max((1 - one_hot_labels) * outputs,
+                             dim=1)  # get the second largest logit 其实这里得到的是非正确标签中的最大概率，i
+            j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit, 其实这里是得到正确标签对应的概率，j
+            # 对于无目标攻击， 我们总是希望真标签对应的概率较小，而不是正确的标签的概率较大， 即 (i-j)越大越好， (j-i)越小越好
+            out1 = torch.clamp((torch.log(j) - torch.log(i)), min=-kappa).sum()
+            cost = L2_loss + c * out1
+            return cost
+
+        def pure_lbfgs_attack_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            c = 1
+            adv_images = tanh_space(w)
+
+            current_L2 = MSELoss(Flatten(adv_images),
+                                 Flatten(init_images)).sum(dim=1)
+            L2_loss = current_L2.sum()
+
+            outputs = model(adv_images)
+
+            cost = L2_loss + c * CELoss(outputs, labels)
+            return -cost
+
+        # res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=False)
+        # res1 = minimize(cw_log_loss, w.detach().clone(), method='newton-exact',
+        #                 # options={'handle_npd': 'cauchy'},
+        #                 max_iter=10, tol=1e-5,
+        #                 disp=False)
+        # adv_image = tanh_space(res1.x)
+        adversary = LBFGSAttack(predict=model, initial_const=100000, num_classes=10)
+
+        adv_image = adversary.perturb(images.detach().clone(), y=labels.detach().clone())
+        print(torch.sum((adv_image == images)))
         return adv_image
-    atk = generate_attack_method(attack_name, model, epsilon, Iterations, Momentum)
-    images_under_attack = atk(images, labels)
-    return images_under_attack
 
 
-def attack_one_model(model, test_loader, test_loader_size, attack_method_set, Epsilon, Iterations, Momentum, ):
+def attack_one_model(model, test_loader, test_loader_size, attack_method_set, options):
     test_count = 0.
     epoch_num = 0
     acc_before_attack = 0.
     sample_attacked = 0
     attack_success_num = torch.zeros(len(attack_method_set), dtype=torch.float)
     attack_success_confidence = torch.zeros(len(attack_method_set), dtype=torch.float)
+    attack_success_perturbation = torch.zeros(len(attack_method_set), dtype=torch.float)
     # acc_after_FGSM, acc_after_PGD, acc_after_MI_FGSM, \
     # acc_after_I_FGSM, acc_after_Adam_FGSM, acc_after_Adam_FGSM2 = 0, 0, 0, 0, 0, 0
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
@@ -209,7 +252,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, Ep
 
     # Norm_p = 1
     # Epsilon = 10
-    epsilon = Epsilon / 255.
+    # epsilon = Epsilon / 255.
     # Iterations = 10
     # Momentum = 0.9
     # print('len(test_loader)', len(test_loader))
@@ -242,79 +285,82 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, Ep
         # ------------------------------
 
         if min(images.shape) == 0:
-            print('empty tensor')
-            continue
-        if min(labels.shape) == 0:
-            print('empty tensor')
+            print('No images correctly classified in this batch')
             continue
 
         acc_before_attack += predict_answer.sum().item()
-        """
-        这里重新写一下, 对图片的处理, 攻击方法的设置
-        """
+        # 统计神经网络分类正确的样本的个数总和
+        sample_attacked += labels.shape[0]
 
-        for idx, attack_name in enumerate(attack_method_set):
-            images_under_attack = generate_adv_images(attack_name, model, images, labels, epsilon, Iterations, Momentum)
+        for idx, attack_i in enumerate(attack_method_set):
+            images_under_attack = generate_adv_images(attack_i, model, images, labels, options)
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
-            print(predict[0] == labels[0])
-            # 记录每一个攻击方法在每一批次的成功个数
+            perturbation = images_under_attack.detach().clone().view(images.shape[0], -1) - \
+                           images.detach().clone().view(images.shape[0], -1)
+            perturbation_norm2 = torch.linalg.norm(perturbation, ord=2, dim=1)
+            # print(predict[0] == labels[0])
+            # 记录每一个攻击方法在每一批次的攻击成功个数
             attack_success_num[idx] += (labels != predict).sum().item()
 
             # 记录误分类置信度
-            # 选出攻击成功的对抗样本的置信度
+            # 攻击成功的对抗样本的置信度
             # 选择攻击成功的images的confidences
-            misclassification = ()
+            # misclassification = ()
             # print('predict_answer', predict_answer)
-            # 我们要确保predict correct是一个一维向量,因此使用flatten
+            # 我们要确保 predict correct 是一个一维向量,因此使用 flatten
+
             predict_incorrect_index = torch.flatten(torch.nonzero(labels != predict))
             # print('predict_correct_index', predict_correct_index)
             confidence_value = torch.index_select(confidence, 0, predict_incorrect_index)
+            perturbation_norm2_value = torch.index_select(perturbation_norm2, 0, predict_incorrect_index)
+
             attack_success_confidence[idx] += confidence_value.sum().item()
+            attack_success_perturbation[idx] += perturbation_norm2_value.sum().item()
 
             if epoch_num == 1:
                 print('predict_correct_element_num: ', predict_correct_index.nelement())
                 titles = (str(labels[0].item()), str(predict[0].item()))
-                # show_one_image(images, 'image_after_' + attack_name)
+                # show_one_image(images, 'image_after_' + attack_i)
                 show_two_image(images, images_under_attack, titles)
                 break
-        sample_attacked += labels.shape[0]
 
-        break
-
+        if sample_attacked > 1:
+            break
+    print(sample_attacked)
     attack_success_rate = (attack_success_num / sample_attacked) * 100.
-    attack_success_confidence_ave = (attack_success_confidence / attack_success_num)
-    print(attack_success_confidence_ave)
+    attack_success_confidence_ave = (attack_success_confidence / attack_success_num) if attack_success_num != 0 else 0.
+    attack_success_perturbation_ave = (
+            attack_success_perturbation / attack_success_num) if attack_success_num != 0 else 0.
+    # print(attack_success_confidence_ave)
 
-    print('epsilon %d/255 \nIterations %d \nMomentum %.2f' % (Epsilon, Iterations, Momentum))
     for i in range(len(attack_method_set)):
         print('%s_succ_rate = %.2f%%' % (attack_method_set[i], attack_success_rate[i]))
 
     pbar.close()
     print('model acc %.2f' % (acc_before_attack / test_count))
-    return attack_success_rate, attack_success_confidence_ave
+    return attack_success_rate, attack_success_confidence_ave, attack_success_perturbation_ave
 
 
-def attack_many_model(dataset, model_name_set, attack_method_set, batch_size, work_name, Epsilon_set, Iterations_set,
-                      Momentum):
+def attack_many_model(dataset, model_name_set, attack_method_set, batch_size, work_name, option_set):
     lab_result_head = ['model', 'model acc', 'Epsilon', 'Iterations', 'Momentum'] + attack_method_set
     lab_result_content = []
     test_loader, test_dataset_size = load_dataset(dataset, batch_size, is_shuffle=True)
     for mode_name in model_name_set:
         model, model_acc = load_model_args(mode_name)
-        for Epsilon in Epsilon_set:
-            for Iterations in Iterations_set:
-                # FGSM, I_FGSM, PGD, MI_FGSM, Adam_FGSM_acc, Adam_FGSM2_acc
-                attack_method_succ_list, confidence_list = attack_one_model(model=model,
-                                                                            test_loader=test_loader,
-                                                                            test_loader_size=test_dataset_size,
-                                                                            attack_method_set=attack_method_set,
-                                                                            Epsilon=Epsilon,
-                                                                            Iterations=Iterations,
-                                                                            Momentum=Momentum)
-                tmp_list = [mode_name, model_acc, '%d/255' % Epsilon, Iterations, Momentum] + \
-                           attack_method_succ_list.numpy().tolist() + \
-                           confidence_list.numpy().tolist()
-                lab_result_content.append(tmp_list)
+        for option_i in option_set:
+            # FGSM, I_FGSM, PGD, MI_FGSM, Adam_FGSM_acc, Adam_FGSM2_acc
+            attack_method_succ_list, confidence_list, perturbation_list = attack_one_model(model=model,
+                                                                                           test_loader=test_loader,
+                                                                                           test_loader_size=test_dataset_size,
+                                                                                           attack_method_set=attack_method_set,
+                                                                                           options=option_i)
+            tmp_list = [mode_name, model_acc, ] + \
+                       attack_method_succ_list.numpy().tolist() + \
+                       confidence_list.numpy().tolist() + \
+                       perturbation_list.numpy().tolist()
+
+            lab_result_content.append(tmp_list)
+    print(tmp_list)
     save_model_results(work_name, lab_result_head, lab_result_content)
 
 
@@ -324,7 +370,7 @@ if __name__ == '__main__':
 
     batch_size = 1
     attack_method_set = ['second-order', ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
-    mnist_model_name_set = ['LeNet5']  # 'LeNet5', 'FC_256_128'
+    mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
     # cifar10_model_name_set = ['VGG16', ]  # 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121'
     # imagenet_model_name_set = ['ResNet50_ImageNet']
     # 'DenseNet161_ImageNet','ResNet50_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
@@ -332,10 +378,8 @@ if __name__ == '__main__':
     attack_many_model('MNIST',
                       mnist_model_name_set, attack_method_set,
                       batch_size,
-                      work_name='adam_fgsm_mnist',
-                      Epsilon_set=[45],
-                      Iterations_set=[3],
-                      Momentum=1.0)
+                      work_name='second-order-attack',
+                      option_set=[None])
     #
     # attack_many_model('CIFAR10',
     #                   cifar10_model_name_set, attack_method_set,

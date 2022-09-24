@@ -267,7 +267,7 @@ def _minimize_bfgs_core(
             warnflag = 2
             msg = _status_message['pr_loss']
             break
-
+    # for循环执行完成后去执行else语句。如果for循环遇到break，则直接跳出循环，不执行else语句。
     else:
         # if we get to the end, the maximum num. iterations was reached
         warnflag = 1
@@ -278,6 +278,7 @@ def _minimize_bfgs_core(
         print("         Current function value: %f" % f)
         print("         Iterations: %d" % n_iter)
         print("         Function evaluations: %d" % sf.nfev)
+    # 这里将很多结果进行了重新封装， 所以才会出现hessian矩阵的size出现高维的情况。
     result = OptimizeResult(fun=f, x=x.view_as(x0), grad=g.view_as(x0),
                             status=warnflag, success=(warnflag == 0),
                             message=msg, nit=n_iter, nfev=sf.nfev)
