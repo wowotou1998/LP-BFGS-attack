@@ -19,6 +19,21 @@ import os
 # prepare a batch of data and label as "cln_data" and "true_label"
 # ...
 
+import numpy as np
+
+import torch
+import torch.nn as nn
+
+from captum.attr import (
+    GradientShap,
+    DeepLift,
+    DeepLiftShap,
+    IntegratedGradients,
+    LayerConductance,
+    NeuronConductance,
+    NoiseTunnel,
+)
+
 from advertorch.attacks import LBFGSAttack
 
 
@@ -32,19 +47,20 @@ def show_one_image(images, title):
     plt.show()
 
 
-def show_two_image(images, adv_images, titles):
+def show_two_image(images, titles):
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     # plt.figure()
     print(images.shape)
+    N = images.shape[0]
 
     # image = images.cpu().detach().numpy()[0].transpose(1, 2, 0)
     # plt.imshow(image)
     # plt.title(title)
     # plt.show()
 
-    fig, axes = plt.subplots(1, 2, figsize=(4, 2))
-    for i, x in enumerate((images, adv_images)):
-        image = x.cpu().detach().numpy()[0].transpose(1, 2, 0)
+    fig, axes = plt.subplots(1, N, figsize=(2 * N, 2))
+    for i in range(N):
+        image = images[i].cpu().detach().numpy().transpose(1, 2, 0)
         axes[i].imshow(image, cmap='gray')
         axes[i].set_xticks([])
         axes[i].set_yticks([])
@@ -233,6 +249,47 @@ def generate_adv_images(attack_name, model, images, labels, options):
         return adv_image
 
 
+def select_major_contribution_pixels(model, images, labels, rate):
+    """
+    Inputs
+        model,
+        images X: denote a image as a vector X with length n
+        pixel_num: set the number of major attributions pixel
+    Outputs
+        the matrix A: we denote the major attributions pixel as a vector B with length k,
+        so we can get a matrix A that satisfies A X = B, where the size of A is k*n, the size of X is n*1,
+        and then we can get the B whose size is k*1, the variable B
+    Steps
+        1. we must decide the number of the pixel that will be modified
+        2. according to the attributions value to decide the position in which pixel will be changed.
+            2.1 so fist the pixel position must be in conjunction with the attributions value.
+            2.2 find the top-k pixel position where pixels have higher attributions value.
+    """
+    n = images.numel()
+    k = int(n * rate)
+    A = torch.zeros(size=(n, k), device=images.device, dtype=torch.float)
+    # B = torch.zeros(k, device=images.device, dtype=torch.float)
+    # 找到矩阵A, 满足 image = AB+C, A:n*k; B:k*1; C:n*1
+
+    baseline = torch.zeros_like(images)
+    ig = IntegratedGradients(model)
+    # attributions 表明每一个贡献点对最终决策的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
+    attributions, delta = ig.attribute(images, baseline,
+                                       target=labels[0].item(),
+                                       return_convergence_delta=True)
+    attributions = torch.abs(attributions).flatten()
+    v, idx = attributions.sort(descending=True)
+    idx = idx[0:k]
+
+    B = images.detach().clone().flatten()[idx]
+    for i in range(k):
+        # 第 idx[i] 行第 i列 的元素置为 1
+        # idx保存了对最终决策有重要作用的像素点的下标，
+        A[idx[i].item()][i] = 1
+    C0 = images.detach().clone() - A.mul(B)
+    return A, B, C0
+
+
 def attack_one_model(model, test_loader, test_loader_size, attack_method_set, options):
     test_count = 0.
     epoch_num = 0
@@ -319,9 +376,23 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, op
 
             if epoch_num == 1:
                 print('predict_correct_element_num: ', predict_correct_index.nelement())
-                titles = (str(labels[0].item()), str(predict[0].item()))
+                # titles_1 = (str(labels[0].item()), str(predict[0].item()))
                 # show_one_image(images, 'image_after_' + attack_i)
-                show_two_image(images, images_under_attack, titles)
+                # show_two_image(torch.cat([images, images_under_attack], dim=0), titles_1)
+                # ------ IntegratedGradient ------
+                baseline = torch.zeros_like(images)
+                ig = IntegratedGradients(model)
+                titles_2 = (str(labels[0].item()), str(predict[0].item()), 'attributions')
+                # attributions 表明每一个贡献点对最终决策的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
+                attributions, delta = ig.attribute(images, baseline, target=labels[0].item(),
+                                                   return_convergence_delta=True)
+                attributions = torch.abs(attributions)
+                attributions = (attributions - torch.min(attributions)) / (
+                        torch.max(attributions) - torch.min(attributions))
+                show_two_image(torch.cat([images, images_under_attack, attributions], dim=0), titles_2)
+                # print('IG Attributions:', attributions)
+                # print('Convergence Delta:', delta)
+
                 break
 
         if sample_attacked > 1:
@@ -361,7 +432,7 @@ def attack_many_model(dataset, model_name_set, attack_method_set, batch_size, wo
 
             lab_result_content.append(tmp_list)
     print(tmp_list)
-    save_model_results(work_name, lab_result_head, lab_result_content)
+    # save_model_results(work_name, lab_result_head, lab_result_content)
 
 
 if __name__ == '__main__':
