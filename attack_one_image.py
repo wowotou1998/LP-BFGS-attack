@@ -9,12 +9,12 @@ from utils import save_model_results
 from MNIST_models import lenet5, FC_256_128
 import matplotlib.pyplot as plt
 from pytorchcv.model_provider import get_model as ptcv_get_model
-import os
 import torch.nn.functional as F
-import os
 from minimize import minimize
-import torch.nn as nn
-import os
+from pixel_selector import (inverse_tanh_space, tanh_space,
+                            inf2box, box2inf,
+                            select_major_contribution_pixels)
+from attack_method_self_defined import Limted_FGSM, Limited_PGD
 # prepare your pytorch model as "model"
 # prepare a batch of data and label as "cln_data" and "true_label"
 # ...
@@ -23,16 +23,6 @@ import numpy as np
 
 import torch
 import torch.nn as nn
-
-from captum.attr import (
-    GradientShap,
-    DeepLift,
-    DeepLiftShap,
-    IntegratedGradients,
-    LayerConductance,
-    NeuronConductance,
-    NoiseTunnel,
-)
 
 from advertorch.attacks import LBFGSAttack
 
@@ -47,7 +37,7 @@ def show_one_image(images, title):
     plt.show()
 
 
-def show_two_image(images, titles):
+def show_two_image(images, titles, cmaps=None):
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     # plt.figure()
     print(images.shape)
@@ -61,7 +51,7 @@ def show_two_image(images, titles):
     fig, axes = plt.subplots(1, N, figsize=(2 * N, 2))
     for i in range(N):
         image = images[i].cpu().detach().numpy().transpose(1, 2, 0)
-        axes[i].imshow(image, cmap='gray')
+        axes[i].imshow(image, cmap='gray' if cmaps is None else cmaps[i])
         axes[i].set_xticks([])
         axes[i].set_yticks([])
         axes[i].set_title(titles[i])
@@ -161,28 +151,321 @@ def load_dataset(dataset, batch_size, is_shuffle=False):
     return test_loader, test_dataset_size
 
 
-def tanh_space(x):
-    return 1 / 2 * (torch.tanh(x) + 1)
 
 
-def inverse_tanh_space(x):
-    # torch.atanh is only for torch >= 1.7.0
-    def atanh(x):
-        return 0.5 * torch.log((1 + x) / (1 - x))
 
-    return atanh(x * 2 - 1)
+def generate_adv_images_by_k_pixels(attack_name, model, images, labels, options):
+    if attack_name == 'limited_FGSM':
+        atk = Limted_FGSM(model, eps=0.1)
+        adv_images = atk(images, labels)
+        return adv_images
+    if attack_name == 'limited_PGD':
+        atk = Limited_PGD(model, eps=0.9)
+        adv_images = atk(images, labels)
+        return adv_images
+    if attack_name == 'limited-second-order':
+        x0 = images.detach().clone()[0:1]
+        labels = labels[0:1]
+        original_shape = x0.shape
+        A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, )
+
+        KP_box[KP_box == 0.0] = 1. / 255 * 0.1
+        KP_box[KP_box == 1.0] = 1. - 1. / 255 * 0.1
+        w = box2inf(KP_box)
+
+        CELoss = nn.CrossEntropyLoss()
+        MSELoss = nn.MSELoss(reduction='none')
+        Flatten = nn.Flatten()
+
+        def cw_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            kappa = 0
+            c = 1
+            KP_box = inf2box(B_inf)
+            adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
+
+            current_L2 = MSELoss(Flatten(adv_images),
+                                 Flatten(init_images)).sum(dim=1)
+            L2_loss = current_L2.sum()
+
+            outputs = model(adv_images)
+            one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
+            i, _ = torch.max((1 - one_hot_labels) * outputs, dim=1)  # get the second largest logit
+            j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit
+            out1 = torch.clamp((j - i), min=-kappa).sum()
+            cost = L2_loss + c * out1
+            return cost
+
+        def cw_log_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            kappa = 0
+            c = 1000000
+            KP_box = inf2box(B_inf)
+            adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
+
+            current_L2 = MSELoss(Flatten(adv_images),
+                                 Flatten(init_images)).sum(dim=1)
+            L2_loss = current_L2.sum()
+
+            outputs = model(adv_images)
+            one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
+            i, _ = torch.max((1 - one_hot_labels) * outputs,
+                             dim=1)  # get the second largest logit 其实这里得到的是非正确标签中的最大概率，i
+            j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit, 其实这里是得到正确标签对应的概率，j
+            # 对于无目标攻击， 我们总是希望真标签对应的概率较小，而不是正确的标签的概率较大， 即 (i-j)越大越好， (j-i)越小越好
+            out1 = torch.clamp((torch.log(j) - torch.log(i)), min=-kappa).sum()
+            cost = L2_loss + c * out1
+            return cost
+
+        def pure_lbfgs_attack_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            c = 1
+            adv_images = tanh_space(w)
+
+            current_L2 = MSELoss(Flatten(adv_images),
+                                 Flatten(init_images)).sum(dim=1)
+            L2_loss = current_L2.sum()
+
+            outputs = model(adv_images)
+
+            cost = L2_loss + c * CELoss(outputs, labels)
+            return -cost
+
+        res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=False)
+        # res1 = minimize(cw_log_loss, w.detach().clone(), method='newton-exact',
+        #                 # options={'handle_npd': 'cauchy'},
+        #                 max_iter=10, tol=1e-5,
+        #                 disp=False)
+
+        KP_box = inf2box(res1.x)
+        adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
+
+        # adversary = LBFGSAttack(predict=model, initial_const=100000, num_classes=10)
+        # adv_image = adversary.perturb(images.detach().clone(), y=labels.detach().clone())
+        # print(torch.sum((adv_image == images)))
+        return adv_images
 
 
+def attack_one_model(model, test_loader, test_loader_size, attack_method_set, options):
+    device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
+    sample_num = 0.
+    epoch_num = 0
+
+    acc_num_before_attack = 0.
+
+    attack_success_num = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+
+    confidence_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    noise_norm2_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    noise_norm_inf_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+
+    # every epoch has 64 images ,every images has 1 channel and the channel size is 28*28
+    pbar = tqdm(total=test_loader_size)
+    model.to(device)
+    model.eval()
+
+    for data in test_loader:
+        # train_loader is a class, DataSet is a list(length is 2,2 tensors) ,images is a tensor,labels is a tensor
+        # images is consisted by 64 tensor, so we will get the 64 * 10 matrix. labels is a 64*1 matrix, like a vector.
+        images, labels = data
+        images = images.to(device)
+        labels = labels.to(device)
+        images.requires_grad_(True)
+
+        batch_num = labels.shape[0]
+        epoch_num += 1
+        sample_num += batch_num
+        pbar.update(batch_num)
+
+        # if batch_num > 10000:
+        #     break
+        # labels.requires_grad_(True)
+
+        _, predict = torch.max(model(images), 1)
+        # 选择预测正确的images和labels，剔除预测不正确的images和labels
+        predict_answer = (labels == predict)
+        # print('predict_answer', predict_answer)
+        # 我们要确保predict correct是一个一维向量,因此使用flatten
+        predict_correct_index = torch.flatten(torch.nonzero(predict_answer))
+        # print('predict_correct_index', predict_correct_index)
+        images = torch.index_select(images, 0, predict_correct_index)
+        labels = torch.index_select(labels, 0, predict_correct_index)
+        # ------------------------------
+
+        if min(images.shape) == 0:
+            print('\nNo images correctly classified in this batch')
+            continue
+
+        acc_num_before_attack += predict_answer.sum().item()
+        # 统计神经网络分类正确的样本的个数总和
+        # valid_attack_num += labels.shape[0]
+
+        for idx, attack_i in enumerate(attack_method_set):
+            images_under_attack = generate_adv_images_by_k_pixels(attack_i, model, images, labels, options)
+
+            confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
+            noise = images_under_attack.detach().clone().view(images.shape[0], -1) - \
+                    images.detach().clone().view(images.shape[0], -1)
+            noise_norm2 = torch.linalg.norm(noise, ord=2, dim=1)
+            noise_norm_inf = torch.linalg.norm(noise, ord=float('inf'), dim=1)
+
+            # 记录每一个攻击方法在每一批次的攻击成功个数
+            attack_success_num[idx] += (labels != predict).sum().item()
+            # 记录误分类置信度
+            # 攻击成功的对抗样本的置信度
+            # 选择攻击成功的images的confidences
+            # misclassification = ()
+            # print('predict_answer', predict_answer)
+            # 我们要确保 predict correct 是一个一维向量,因此使用 flatten
+
+            predict_incorrect_index = torch.flatten(torch.nonzero(labels != predict))
+            # print('predict_correct_index', predict_correct_index)
+            valid_confidence = torch.index_select(confidence, 0, predict_incorrect_index)
+            valid_noise_norm2 = torch.index_select(noise_norm2, 0, predict_incorrect_index)
+            valid_noise_norm_inf = torch.index_select(noise_norm_inf, 0, predict_incorrect_index)
+
+            confidence_total[idx] += valid_confidence.sum().item()
+            noise_norm2_total[idx] += valid_noise_norm2.sum().item()
+            noise_norm_inf_total[idx] += valid_noise_norm_inf.sum().item()
+
+            if epoch_num == 1:
+                print('predict_correct_element_num: ', predict_correct_index.nelement())
+                titles_1 = (str(labels[0].item()), str(predict[0].item()))
+                # show_one_image(images, 'image_after_' + attack_i)
+                show_two_image(torch.cat([images, images_under_attack], dim=0), titles_1)
+
+                # ------ IntegratedGradient ------
+                # select_major_contribution_pixels(model, images, labels, rate=1.0 / 28)
+                # baseline = torch.zeros_like(images)
+                # ig = IntegratedGradients(model)
+                # titles_2 = (str(labels[0].item()), str(predict[0].item()), 'attributions')
+                # # attributions 表明每一个贡献点对最终决策的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
+                # attributions, delta = ig.attribute(images, baseline, target=labels[0].item(),
+                #                                    return_convergence_delta=True)
+                # attributions = torch.abs(attributions)
+                # attributions = (attributions - torch.min(attributions)) / (
+                #         torch.max(attributions) - torch.min(attributions))
+                # show_two_image(torch.cat([images, images_under_attack, attributions], dim=0), titles_2)
+                # print('IG Attributions:', attributions)
+                # print('Convergence Delta:', delta)
+
+                # break
+
+        if attack_success_num > 100:
+            break
+    print(attack_success_num)
+    attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
+    # attack_success_num[attack_success_num == 0] = float('inf'), 防止出现除 0 溢出 inf
+    confidence_ave = (confidence_total / attack_success_num)
+    noise_norm2_ave = (noise_norm2_total / attack_success_num)
+    noise_norm_inf_ave = (noise_norm_inf_total / attack_success_num)
+
+    for i in range(len(attack_method_set)):
+        print('%s ASR = %.2f%%, confidence %.2f, norm(2) = %.2f, norm(inf) = %.2f' % (
+        attack_method_set[i],
+        attack_success_rate[i],
+        confidence_ave[i],
+        noise_norm2_ave[i],
+        noise_norm_inf_ave))
+
+    pbar.close()
+    print('model acc %.2f' % (acc_num_before_attack / sample_num))
+    return attack_success_rate, confidence_ave, noise_norm2_ave
+
+
+def attack_many_model(dataset, model_name_set, attack_method_set, batch_size, work_name, option_set):
+    test_loader, test_dataset_size = load_dataset(dataset, batch_size, is_shuffle=True)
+    for mode_name in model_name_set:
+        model, model_acc = load_model_args(mode_name)
+        for option_i in option_set:
+            attack_method_succ_list, confidence_list, perturbation_list = attack_one_model(model=model,
+                                                                                           test_loader=test_loader,
+                                                                                           test_loader_size=test_dataset_size,
+                                                                                           attack_method_set=attack_method_set,
+                                                                                           options=option_i)
+
+
+if __name__ == '__main__':
+    import os
+
+    os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+    from pylab import mpl
+
+    # matplotlib.use('agg')
+    # matplotlib.get_backend()
+    # mpl.rcParams['font.sans-serif'] = ['Times New Roman']
+    # mpl.rcParams['font.sans-serif'] = ['Arial']
+    mpl.rcParams['backend'] = 'agg'
+    # mpl.rcParams["font.size"] = 12
+    mpl.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
+    # mpl.rcParams['savefig.dpi'] = 400  # 保存图片分辨率
+    mpl.rcParams['figure.constrained_layout.use'] = True
+    plt.rcParams['xtick.direction'] = 'in'  # 将x周的刻度线方向设置向内
+    plt.rcParams['ytick.direction'] = 'in'  # 将y轴的刻度方向设置向内
+
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+
+    batch_size = 1
+    attack_method_set = [
+        'limited-second-order',
+        # 'limited_FGSM'
+        # 'limited_PGD'
+    ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
+    mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
+    # cifar10_model_name_set = ['VGG16', ]  # 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121'
+    # imagenet_model_name_set = ['ResNet50_ImageNet']
+    # 'DenseNet161_ImageNet','ResNet50_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
+
+    attack_many_model('MNIST',
+                      mnist_model_name_set, attack_method_set,
+                      batch_size,
+                      work_name='second-order-attack',
+                      option_set=[None])
+    #
+    # attack_many_model('CIFAR10',
+    #                   cifar10_model_name_set, attack_method_set,
+    #                   batch_size,
+    #                   work_name='adam_fgsm_cifar',
+    #                   Epsilon_set=[5],
+    #                   Iterations_set=[10],
+    #                   Momentum=1.0)
+
+    # attack_many_model('ImageNet',
+    #                   imagenet_model_name_set, attack_method_set,
+    #                   batch_size,
+    #                   work_name='adam_fgsm_imagenet',
+    #                   Epsilon_set=[3],
+    #                   Iterations_set=[10],
+    #                   Momentum=1.0)
+
+    # VGG16 pao yi xia
+    # attack_many_model('ImageNet',
+    #                   imagenet_model_name_set, attack_method_set,
+    #                   batch_size,
+    #                   work_name='imagenet_iteration_compare',
+    #                   Epsilon_set=[5],
+    #                   Iterations_set=[1, 4, 8, 12, 16, 20],
+    #                   Momentum=1.0)
+    #
+    # attack_many_model(model_name_set, attack_method_set,
+    #                   batch_size,
+    #                   work_name='iterations_compare',
+    #                   Epsilon_set=[5],
+    #                   Iterations_set=[1],
+    #                   Momentum=0.9)
+    print("ALL WORK HAVE BEEN DONE!!!")
+
+
+'''
 def generate_adv_images(attack_name, model, images, labels, options):
     if attack_name == 'second-order':
         x0 = images[0:1]
-        x0[x0 == 0.0] = 1. / 255 * 0.1
-        x0[x0 == 1.0] = 1. - 1. / 255 * 0.1
+        x0[x0 == 0.0] = 1. / 255 * 0.01
+        x0[x0 == 1.0] = 1. - 1. / 255 * 0.01
         w = inverse_tanh_space(x0)
 
         # def func(image, label=labels[0].detach().clone()):
         #     logits = model(tanh_space(image))
         #     return -logits[0][label]
+
         CELoss = nn.CrossEntropyLoss()
         MSELoss = nn.MSELoss(reduction='none')
         Flatten = nn.Flatten()
@@ -236,7 +519,7 @@ def generate_adv_images(attack_name, model, images, labels, options):
             cost = L2_loss + c * CELoss(outputs, labels)
             return -cost
 
-        # res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=False)
+        res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=False)
         # res1 = minimize(cw_log_loss, w.detach().clone(), method='newton-exact',
         #                 # options={'handle_npd': 'cauchy'},
         #                 max_iter=10, tol=1e-5,
@@ -248,239 +531,86 @@ def generate_adv_images(attack_name, model, images, labels, options):
         print(torch.sum((adv_image == images)))
         return adv_image
 
+    if attack_name == 'limited-second-order':
+        x0 = images[0:1]
+        labels = labels[0:1]
+        original_shape = x0.shape
+        A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, rate=10. / 28)
 
-def select_major_contribution_pixels(model, images, labels, rate):
-    """
-    Inputs
-        model,
-        images X: denote a image as a vector X with length n
-        pixel_num: set the number of major attributions pixel
-    Outputs
-        the matrix A: we denote the major attributions pixel as a vector B with length k,
-        so we can get a matrix A that satisfies A X = B, where the size of A is k*n, the size of X is n*1,
-        and then we can get the B whose size is k*1, the variable B
-    Steps
-        1. we must decide the number of the pixel that will be modified
-        2. according to the attributions value to decide the position in which pixel will be changed.
-            2.1 so fist the pixel position must be in conjunction with the attributions value.
-            2.2 find the top-k pixel position where pixels have higher attributions value.
-    """
-    n = images.numel()
-    k = int(n * rate)
-    A = torch.zeros(size=(n, k), device=images.device, dtype=torch.float)
-    # B = torch.zeros(k, device=images.device, dtype=torch.float)
-    # 找到矩阵A, 满足 image = AB+C, A:n*k; B:k*1; C:n*1
+        KP_box[KP_box == 0.0] = 1. / 255 * 0.1
+        KP_box[KP_box == 1.0] = 1. - 1. / 255 * 0.1
+        w = box2inf(KP_box)
 
-    baseline = torch.zeros_like(images)
-    ig = IntegratedGradients(model)
-    # attributions 表明每一个贡献点对最终决策的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
-    attributions, delta = ig.attribute(images, baseline,
-                                       target=labels[0].item(),
-                                       return_convergence_delta=True)
-    attributions = torch.abs(attributions).flatten()
-    v, idx = attributions.sort(descending=True)
-    idx = idx[0:k]
+        # def func(image, label=labels[0].detach().clone()):
+        #     logits = model(tanh_space(image))
+        #     return -logits[0][label]
 
-    B = images.detach().clone().flatten()[idx]
-    for i in range(k):
-        # 第 idx[i] 行第 i列 的元素置为 1
-        # idx保存了对最终决策有重要作用的像素点的下标，
-        A[idx[i].item()][i] = 1
-    C0 = images.detach().clone() - A.mul(B)
-    return A, B, C0
+        CELoss = nn.CrossEntropyLoss()
+        MSELoss = nn.MSELoss(reduction='none')
+        Flatten = nn.Flatten()
 
+        def cw_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            kappa = 0
+            c = 1
+            KP_box = inf2box(B_inf)
+            adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
-def attack_one_model(model, test_loader, test_loader_size, attack_method_set, options):
-    test_count = 0.
-    epoch_num = 0
-    acc_before_attack = 0.
-    sample_attacked = 0
-    attack_success_num = torch.zeros(len(attack_method_set), dtype=torch.float)
-    attack_success_confidence = torch.zeros(len(attack_method_set), dtype=torch.float)
-    attack_success_perturbation = torch.zeros(len(attack_method_set), dtype=torch.float)
-    # acc_after_FGSM, acc_after_PGD, acc_after_MI_FGSM, \
-    # acc_after_I_FGSM, acc_after_Adam_FGSM, acc_after_Adam_FGSM2 = 0, 0, 0, 0, 0, 0
-    device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
+            current_L2 = MSELoss(Flatten(adv_images),
+                                 Flatten(init_images)).sum(dim=1)
+            L2_loss = current_L2.sum()
 
-    # every epoch has 64 images ,every images has 1 channel and the channel size is 28*28
-    pbar = tqdm(total=test_loader_size)
-    model.to(device)
-    model.eval()
+            outputs = model(adv_images)
+            one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
+            i, _ = torch.max((1 - one_hot_labels) * outputs, dim=1)  # get the second largest logit
+            j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit
+            out1 = torch.clamp((j - i), min=-kappa).sum()
+            cost = L2_loss + c * out1
+            return cost
 
-    # Norm_p = 1
-    # Epsilon = 10
-    # epsilon = Epsilon / 255.
-    # Iterations = 10
-    # Momentum = 0.9
-    # print('len(test_loader)', len(test_loader))
+        def cw_log_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            kappa = 0
+            c = 1000000
+            KP_box = inf2box(B_inf)
+            adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
-    for data in test_loader:
-        # train_loader is a class, DataSet is a list(length is 2,2 tensors) ,images is a tensor,labels is a tensor
-        # images is consisted by 64 tensor, so we will get the 64 * 10 matrix. labels is a 64*1 matrix, like a vector.
-        images, labels = data
-        images = images.to(device)
-        labels = labels.to(device)
-        images.requires_grad_(True)
-        epoch_size = labels.shape[0]
-        epoch_num += 1
-        test_count += epoch_size
-        pbar.update(epoch_size)
-        # if test_count > 10000:
-        #     break
+            current_L2 = MSELoss(Flatten(adv_images),
+                                 Flatten(init_images)).sum(dim=1)
+            L2_loss = current_L2.sum()
 
-        # labels.requires_grad_(True)
+            outputs = model(adv_images)
+            one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
+            i, _ = torch.max((1 - one_hot_labels) * outputs,
+                             dim=1)  # get the second largest logit 其实这里得到的是非正确标签中的最大概率，i
+            j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit, 其实这里是得到正确标签对应的概率，j
+            # 对于无目标攻击， 我们总是希望真标签对应的概率较小，而不是正确的标签的概率较大， 即 (i-j)越大越好， (j-i)越小越好
+            out1 = torch.clamp((torch.log(j) - torch.log(i)), min=-kappa).sum()
+            cost = L2_loss + c * out1
+            return cost
 
-        _, predict = torch.max(model(images), 1)
-        # 选择预测正确的images和labels，剔除预测不正确的images和labels
-        predict_answer = (labels == predict)
-        # print('predict_answer', predict_answer)
-        # 我们要确保predict correct是一个一维向量,因此使用flatten
-        predict_correct_index = torch.flatten(torch.nonzero(predict_answer))
-        # print('predict_correct_index', predict_correct_index)
-        images = torch.index_select(images, 0, predict_correct_index)
-        labels = torch.index_select(labels, 0, predict_correct_index)
-        # ------------------------------
+        def pure_lbfgs_attack_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            c = 1
+            adv_images = tanh_space(w)
 
-        if min(images.shape) == 0:
-            print('No images correctly classified in this batch')
-            continue
+            current_L2 = MSELoss(Flatten(adv_images),
+                                 Flatten(init_images)).sum(dim=1)
+            L2_loss = current_L2.sum()
 
-        acc_before_attack += predict_answer.sum().item()
-        # 统计神经网络分类正确的样本的个数总和
-        sample_attacked += labels.shape[0]
+            outputs = model(adv_images)
 
-        for idx, attack_i in enumerate(attack_method_set):
-            images_under_attack = generate_adv_images(attack_i, model, images, labels, options)
-            confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
-            perturbation = images_under_attack.detach().clone().view(images.shape[0], -1) - \
-                           images.detach().clone().view(images.shape[0], -1)
-            perturbation_norm2 = torch.linalg.norm(perturbation, ord=2, dim=1)
-            # print(predict[0] == labels[0])
-            # 记录每一个攻击方法在每一批次的攻击成功个数
-            attack_success_num[idx] += (labels != predict).sum().item()
+            cost = L2_loss + c * CELoss(outputs, labels)
+            return -cost
 
-            # 记录误分类置信度
-            # 攻击成功的对抗样本的置信度
-            # 选择攻击成功的images的confidences
-            # misclassification = ()
-            # print('predict_answer', predict_answer)
-            # 我们要确保 predict correct 是一个一维向量,因此使用 flatten
+        res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=False)
+        # res1 = minimize(cw_log_loss, w.detach().clone(), method='newton-exact',
+        #                 # options={'handle_npd': 'cauchy'},
+        #                 max_iter=10, tol=1e-5,
+        #                 disp=False)
 
-            predict_incorrect_index = torch.flatten(torch.nonzero(labels != predict))
-            # print('predict_correct_index', predict_correct_index)
-            confidence_value = torch.index_select(confidence, 0, predict_incorrect_index)
-            perturbation_norm2_value = torch.index_select(perturbation_norm2, 0, predict_incorrect_index)
+        KP_box = inf2box(res1.x)
+        adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
-            attack_success_confidence[idx] += confidence_value.sum().item()
-            attack_success_perturbation[idx] += perturbation_norm2_value.sum().item()
-
-            if epoch_num == 1:
-                print('predict_correct_element_num: ', predict_correct_index.nelement())
-                # titles_1 = (str(labels[0].item()), str(predict[0].item()))
-                # show_one_image(images, 'image_after_' + attack_i)
-                # show_two_image(torch.cat([images, images_under_attack], dim=0), titles_1)
-                # ------ IntegratedGradient ------
-                baseline = torch.zeros_like(images)
-                ig = IntegratedGradients(model)
-                titles_2 = (str(labels[0].item()), str(predict[0].item()), 'attributions')
-                # attributions 表明每一个贡献点对最终决策的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
-                attributions, delta = ig.attribute(images, baseline, target=labels[0].item(),
-                                                   return_convergence_delta=True)
-                attributions = torch.abs(attributions)
-                attributions = (attributions - torch.min(attributions)) / (
-                        torch.max(attributions) - torch.min(attributions))
-                show_two_image(torch.cat([images, images_under_attack, attributions], dim=0), titles_2)
-                # print('IG Attributions:', attributions)
-                # print('Convergence Delta:', delta)
-
-                break
-
-        if sample_attacked > 1:
-            break
-    print(sample_attacked)
-    attack_success_rate = (attack_success_num / sample_attacked) * 100.
-    attack_success_confidence_ave = (attack_success_confidence / attack_success_num) if attack_success_num != 0 else 0.
-    attack_success_perturbation_ave = (
-            attack_success_perturbation / attack_success_num) if attack_success_num != 0 else 0.
-    # print(attack_success_confidence_ave)
-
-    for i in range(len(attack_method_set)):
-        print('%s_succ_rate = %.2f%%' % (attack_method_set[i], attack_success_rate[i]))
-
-    pbar.close()
-    print('model acc %.2f' % (acc_before_attack / test_count))
-    return attack_success_rate, attack_success_confidence_ave, attack_success_perturbation_ave
-
-
-def attack_many_model(dataset, model_name_set, attack_method_set, batch_size, work_name, option_set):
-    lab_result_head = ['model', 'model acc', 'Epsilon', 'Iterations', 'Momentum'] + attack_method_set
-    lab_result_content = []
-    test_loader, test_dataset_size = load_dataset(dataset, batch_size, is_shuffle=True)
-    for mode_name in model_name_set:
-        model, model_acc = load_model_args(mode_name)
-        for option_i in option_set:
-            # FGSM, I_FGSM, PGD, MI_FGSM, Adam_FGSM_acc, Adam_FGSM2_acc
-            attack_method_succ_list, confidence_list, perturbation_list = attack_one_model(model=model,
-                                                                                           test_loader=test_loader,
-                                                                                           test_loader_size=test_dataset_size,
-                                                                                           attack_method_set=attack_method_set,
-                                                                                           options=option_i)
-            tmp_list = [mode_name, model_acc, ] + \
-                       attack_method_succ_list.numpy().tolist() + \
-                       confidence_list.numpy().tolist() + \
-                       perturbation_list.numpy().tolist()
-
-            lab_result_content.append(tmp_list)
-    print(tmp_list)
-    # save_model_results(work_name, lab_result_head, lab_result_content)
-
-
-if __name__ == '__main__':
-    if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True
-
-    batch_size = 1
-    attack_method_set = ['second-order', ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
-    mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
-    # cifar10_model_name_set = ['VGG16', ]  # 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121'
-    # imagenet_model_name_set = ['ResNet50_ImageNet']
-    # 'DenseNet161_ImageNet','ResNet50_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
-
-    attack_many_model('MNIST',
-                      mnist_model_name_set, attack_method_set,
-                      batch_size,
-                      work_name='second-order-attack',
-                      option_set=[None])
-    #
-    # attack_many_model('CIFAR10',
-    #                   cifar10_model_name_set, attack_method_set,
-    #                   batch_size,
-    #                   work_name='adam_fgsm_cifar',
-    #                   Epsilon_set=[5],
-    #                   Iterations_set=[10],
-    #                   Momentum=1.0)
-
-    # attack_many_model('ImageNet',
-    #                   imagenet_model_name_set, attack_method_set,
-    #                   batch_size,
-    #                   work_name='adam_fgsm_imagenet',
-    #                   Epsilon_set=[3],
-    #                   Iterations_set=[10],
-    #                   Momentum=1.0)
-
-    # VGG16 pao yi xia
-    # attack_many_model('ImageNet',
-    #                   imagenet_model_name_set, attack_method_set,
-    #                   batch_size,
-    #                   work_name='imagenet_iteration_compare',
-    #                   Epsilon_set=[5],
-    #                   Iterations_set=[1, 4, 8, 12, 16, 20],
-    #                   Momentum=1.0)
-    #
-    # attack_many_model(model_name_set, attack_method_set,
-    #                   batch_size,
-    #                   work_name='iterations_compare',
-    #                   Epsilon_set=[5],
-    #                   Iterations_set=[1],
-    #                   Momentum=0.9)
-    print("ALL WORK HAVE BEEN DONE!!!")
+        # adversary = LBFGSAttack(predict=model, initial_const=100000, num_classes=10)
+        # adv_image = adversary.perturb(images.detach().clone(), y=labels.detach().clone())
+        # print(torch.sum((adv_image == images)))
+        return adv_images
+'''
