@@ -13,11 +13,12 @@ import torch.nn.functional as F
 from minimize import minimize
 from pixel_selector import (inverse_tanh_space, tanh_space,
                             inf2box, box2inf,
-                            select_major_contribution_pixels)
-from attack_method_self_defined import Limted_FGSM, Limited_PGD
+                            select_major_contribution_pixels, major_contribution_pixels_idx)
+from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_PGDL2, Limited_CW, Limited_CW2
 # prepare your pytorch model as "model"
 # prepare a batch of data and label as "cln_data" and "true_label"
 # ...
+import pickle
 
 import numpy as np
 
@@ -151,26 +152,32 @@ def load_dataset(dataset, batch_size, is_shuffle=False):
     return test_loader, test_dataset_size
 
 
-
-
-
-def generate_adv_images_by_k_pixels(attack_name, model, images, labels, options):
+def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, rate):
     if attack_name == 'limited_FGSM':
-        atk = Limted_FGSM(model, eps=0.1)
+        atk = Limited_FGSM(model, eps=eps, sample_rate=rate)
         adv_images = atk(images, labels)
         return adv_images
     if attack_name == 'limited_PGD':
-        atk = Limited_PGD(model, eps=0.9)
+        atk = Limited_PGD(model, eps=eps, alpha=(1.2 * eps) / 20, steps=20, sample_rate=rate)
         adv_images = atk(images, labels)
         return adv_images
-    if attack_name == 'limited-second-order':
+    if attack_name == 'limited_PGDL2':
+        atk = Limited_PGDL2(model, eps=eps, alpha=0.27, steps=20, sample_rate=rate)
+        adv_images = atk(images, labels)
+        return adv_images
+    if attack_name == 'limited_CW':
+        atk = Limited_CW2(model, c=1e10, sample_rate=rate)
+        # atk = torchattacks.CW(model, c=1)
+        adv_images = atk(images, labels)
+        return adv_images
+    if attack_name == 'limited_BFGS':
         x0 = images.detach().clone()[0:1]
         labels = labels[0:1]
         original_shape = x0.shape
-        A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, )
+        A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, rate)
 
-        KP_box[KP_box == 0.0] = 1. / 255 * 0.1
-        KP_box[KP_box == 1.0] = 1. - 1. / 255 * 0.1
+        KP_box[KP_box == 0.0] = 1e-4
+        KP_box[KP_box == 1.0] = 1 - 1e-4
         w = box2inf(KP_box)
 
         CELoss = nn.CrossEntropyLoss()
@@ -179,7 +186,7 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, options)
 
         def cw_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
             kappa = 0
-            c = 1
+            c = 1e9
             KP_box = inf2box(B_inf)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -197,7 +204,7 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, options)
 
         def cw_log_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
             kappa = 0
-            c = 1000000
+            c = 1
             KP_box = inf2box(B_inf)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -228,11 +235,12 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, options)
             cost = L2_loss + c * CELoss(outputs, labels)
             return -cost
 
-        res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=False)
+        res1 = minimize(cw_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
         # res1 = minimize(cw_log_loss, w.detach().clone(), method='newton-exact',
         #                 # options={'handle_npd': 'cauchy'},
         #                 max_iter=10, tol=1e-5,
         #                 disp=False)
+        # print('res1', res1)
 
         KP_box = inf2box(res1.x)
         adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
@@ -241,9 +249,10 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, options)
         # adv_image = adversary.perturb(images.detach().clone(), y=labels.detach().clone())
         # print(torch.sum((adv_image == images)))
         return adv_images
+    raise RuntimeError('Unknown attack method')
 
 
-def attack_one_model(model, test_loader, test_loader_size, attack_method_set, options):
+def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N, eps, rate):
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
     sample_num = 0.
     epoch_num = 0
@@ -253,6 +262,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, op
     attack_success_num = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
 
     confidence_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    noise_norm1_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
     noise_norm2_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
     noise_norm_inf_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
 
@@ -287,22 +297,29 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, op
         # print('predict_correct_index', predict_correct_index)
         images = torch.index_select(images, 0, predict_correct_index)
         labels = torch.index_select(labels, 0, predict_correct_index)
+
         # ------------------------------
 
         if min(images.shape) == 0:
             print('\nNo images correctly classified in this batch')
+            # 为了保证不越界，全部分类不正确时要及时退出，避免下面的计算
             continue
+
+        pixel_idx = major_contribution_pixels_idx(model, images, labels, rate)
 
         acc_num_before_attack += predict_answer.sum().item()
         # 统计神经网络分类正确的样本的个数总和
         # valid_attack_num += labels.shape[0]
 
         for idx, attack_i in enumerate(attack_method_set):
-            images_under_attack = generate_adv_images_by_k_pixels(attack_i, model, images, labels, options)
+
+            images_under_attack = generate_adv_images_by_k_pixels(attack_i, model, images, labels, eps, rate)
 
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
             noise = images_under_attack.detach().clone().view(images.shape[0], -1) - \
                     images.detach().clone().view(images.shape[0], -1)
+            noise = torch.index_select(noise, 1, pixel_idx)
+            noise_norm1 = torch.linalg.norm(noise, ord=2, dim=1)
             noise_norm2 = torch.linalg.norm(noise, ord=2, dim=1)
             noise_norm_inf = torch.linalg.norm(noise, ord=float('inf'), dim=1)
 
@@ -314,14 +331,17 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, op
             # misclassification = ()
             # print('predict_answer', predict_answer)
             # 我们要确保 predict correct 是一个一维向量,因此使用 flatten
-
-            predict_incorrect_index = torch.flatten(torch.nonzero(labels != predict))
+            selector = labels != predict
+            attack_success_index = torch.flatten(torch.nonzero(labels != predict))
             # print('predict_correct_index', predict_correct_index)
-            valid_confidence = torch.index_select(confidence, 0, predict_incorrect_index)
-            valid_noise_norm2 = torch.index_select(noise_norm2, 0, predict_incorrect_index)
-            valid_noise_norm_inf = torch.index_select(noise_norm_inf, 0, predict_incorrect_index)
-
+            valid_confidence = torch.index_select(confidence, 0, attack_success_index)
+            valid_noise_norm1 = torch.index_select(noise_norm1, 0, attack_success_index)
+            valid_noise_norm2 = torch.index_select(noise_norm2, 0, attack_success_index)
+            # if valid_noise_norm2==
+            valid_noise_norm_inf = torch.index_select(noise_norm_inf, 0, attack_success_index)
+            a = valid_confidence.sum().item()
             confidence_total[idx] += valid_confidence.sum().item()
+            noise_norm1_total[idx] += valid_noise_norm1.sum().item()
             noise_norm2_total[idx] += valid_noise_norm2.sum().item()
             noise_norm_inf_total[idx] += valid_noise_norm_inf.sum().item()
 
@@ -348,38 +368,61 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, op
 
                 # break
 
-        if attack_success_num > 100:
+        if acc_num_before_attack > N:
             break
     print(attack_success_num)
     attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
     # attack_success_num[attack_success_num == 0] = float('inf'), 防止出现除 0 溢出 inf
     confidence_ave = (confidence_total / attack_success_num)
+    noise_norm1_ave = (noise_norm1_total / attack_success_num)
     noise_norm2_ave = (noise_norm2_total / attack_success_num)
     noise_norm_inf_ave = (noise_norm_inf_total / attack_success_num)
 
     for i in range(len(attack_method_set)):
-        print('%s ASR = %.2f%%, confidence %.2f, norm(2) = %.2f, norm(inf) = %.2f' % (
-        attack_method_set[i],
-        attack_success_rate[i],
-        confidence_ave[i],
-        noise_norm2_ave[i],
-        noise_norm_inf_ave))
+        print('eps=%.2f, rate=%.2f, %s ASR=%.2f%%, confidence=%.2f, norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
+            eps, rate,
+            attack_method_set[i],
+            attack_success_rate[i],
+            confidence_ave[i],
+            noise_norm1_ave[i],
+            noise_norm2_ave[i],
+            noise_norm_inf_ave[i]))
 
     pbar.close()
     print('model acc %.2f' % (acc_num_before_attack / sample_num))
-    return attack_success_rate, confidence_ave, noise_norm2_ave
+    return attack_success_rate, confidence_ave, noise_norm2_ave, noise_norm_inf_ave
 
 
-def attack_many_model(dataset, model_name_set, attack_method_set, batch_size, work_name, option_set):
+def attack_many_model(dataset, model_name_set, attack_method_set, batch_size, eps_set, rate_set):
+    import datetime
+    # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     test_loader, test_dataset_size = load_dataset(dataset, batch_size, is_shuffle=True)
+    data = [['mode_name', 'eps_i', 'rate_i', 'attack_success_list', 'confidence_list', 'perturbation_list']]
+
+    # eps_set = [2],
+    # rate_set = [10. / (28 ** 2), ]
+
     for mode_name in model_name_set:
         model, model_acc = load_model_args(mode_name)
-        for option_i in option_set:
-            attack_method_succ_list, confidence_list, perturbation_list = attack_one_model(model=model,
-                                                                                           test_loader=test_loader,
-                                                                                           test_loader_size=test_dataset_size,
-                                                                                           attack_method_set=attack_method_set,
-                                                                                           options=option_i)
+        for eps_i in eps_set:
+            for rate_i in rate_set:
+                attack_success_list, confidence_list, noise_norm2_list, noise_norm_inf_list = attack_one_model(
+                    model=model,
+                    test_loader=test_loader,
+                    test_loader_size=test_dataset_size,
+                    attack_method_set=attack_method_set,
+                    N=6,
+                    eps=eps_i,
+                    rate=rate_i)
+                success_rate, confidence, norm2, norm_inf = attack_success_list.cpu().numpy().tolist(), \
+                                                            confidence_list.cpu().numpy().tolist(), \
+                                                            noise_norm2_list.cpu().numpy().tolist(), \
+                                                            noise_norm_inf_list.cpu().numpy().tolist()
+                data.append([mode_name, eps_i, rate_i, success_rate, confidence, norm2, norm_inf])
+    with open('./Checkpoint/%s.pkl' % ('data',), 'wb') as f:
+        pickle.dump(data, f)
+    # with open('%s.pkl' % ('pkl'), 'rb') as f:
+    #     basic_info = pickle.load(f)
 
 
 if __name__ == '__main__':
@@ -387,6 +430,7 @@ if __name__ == '__main__':
 
     os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
     from pylab import mpl
+    import random
 
     # matplotlib.use('agg')
     # matplotlib.get_backend()
@@ -403,11 +447,22 @@ if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
 
+    # 生成随机数，以便固定后续随机数，方便复现代码
+    random.seed(123)
+    # 没有使用GPU的时候设置的固定生成的随机数
+    np.random.seed(123)
+    # 为CPU设置种子用于生成随机数，以使得结果是确定的
+    torch.manual_seed(123)
+    # torch.cuda.manual_seed()为当前GPU设置随机种子
+    torch.cuda.manual_seed(123)
+
     batch_size = 1
     attack_method_set = [
-        'limited-second-order',
-        # 'limited_FGSM'
-        # 'limited_PGD'
+        'limited_BFGS',
+        # 'limited_FGSM',
+        # 'limited_PGD',
+        # 'limited_PGDL2',
+        # 'limited_CW',
     ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
     mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
     # cifar10_model_name_set = ['VGG16', ]  # 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121'
@@ -417,8 +472,9 @@ if __name__ == '__main__':
     attack_many_model('MNIST',
                       mnist_model_name_set, attack_method_set,
                       batch_size,
-                      work_name='second-order-attack',
-                      option_set=[None])
+                      eps_set=[0.5],
+                      rate_set=[20. / (28 ** 2), ]
+                      )
     #
     # attack_many_model('CIFAR10',
     #                   cifar10_model_name_set, attack_method_set,
@@ -452,7 +508,6 @@ if __name__ == '__main__':
     #                   Iterations_set=[1],
     #                   Momentum=0.9)
     print("ALL WORK HAVE BEEN DONE!!!")
-
 
 '''
 def generate_adv_images(attack_name, model, images, labels, options):

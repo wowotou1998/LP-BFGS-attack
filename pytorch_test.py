@@ -1,6 +1,12 @@
 import torch
 
 a = torch.tensor([[[1, 2]]])
+print('a[...]', a[...][0][0])
+# 取行
+# print(a[[0,1],:])
+# 取列
+print(a[:, :, [1]])
+
 print(a.flatten())
 print(a.view(-1))
 b = a.flatten()
@@ -11,4 +17,5 @@ print(b)
 
 c = torch.tensor([1, 2])
 d = torch.tensor([2, 2])
-print(c/d)
+print(c / d)
+print(c)

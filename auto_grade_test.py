@@ -1,6 +1,8 @@
 import torch
 
-x = torch.ones(3, 4).requires_grad_(True)*2
+x = torch.as_tensor([1])
+print(torch.nn.functional.one_hot(x, num_classes=10))
+x = torch.ones(3, 4).requires_grad_(True) * 2
 # for i in range(3):
 #     for j in range(4):
 #         x[i][j] = i + j

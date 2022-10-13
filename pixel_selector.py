@@ -30,7 +30,24 @@ def box2inf(x):
     return torch.atanh(2.0 * x - 1.)
 
 
-def select_major_contribution_pixels(model, images, labels, rate=0.1):
+def major_contribution_pixels_idx(model, images, labels, rate):
+    n = images.numel()
+    k = int(n * rate)
+    baseline = torch.zeros_like(images)
+    ig = IntegratedGradients(model)
+    # attributions 表明每一个贡献点对最终决策（正确的标签）的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
+    attributions, delta = ig.attribute(images, baseline,
+                                       target=labels[0].item(),
+                                       return_convergence_delta=True)
+
+    attributions_abs = torch.abs(attributions)
+    attributions_abs_flat = attributions_abs.flatten()
+    v, idx = attributions_abs_flat.sort(descending=True)
+    idx = idx[0:k]
+    return idx
+
+
+def select_major_contribution_pixels(model, images, labels, rate):
     """
     Inputs
         model,
@@ -53,18 +70,7 @@ def select_major_contribution_pixels(model, images, labels, rate=0.1):
     A = torch.zeros(size=(n, k), device=images.device, dtype=torch.float)
     # KP = torch.zeros(k, device=images.device, dtype=torch.float)
     # 找到矩阵A, 满足 image = A*KP+RP, A:n*k; KP:k*1; C:n*1
-
-    baseline = torch.zeros_like(images)
-    ig = IntegratedGradients(model)
-    # attributions 表明每一个贡献点对最终决策（正确的标签）的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
-    attributions, delta = ig.attribute(images, baseline,
-                                       target=labels[0].item(),
-                                       return_convergence_delta=True)
-
-    attributions_abs = torch.abs(attributions)
-    attributions_abs_flat = attributions_abs.flatten()
-    v, idx = attributions_abs_flat.sort(descending=True)
-    idx = idx[0:k]
+    idx = major_contribution_pixels_idx(model, images, labels, rate)
 
     KP = images.detach().clone().flatten()[idx].view(-1, 1)
 
