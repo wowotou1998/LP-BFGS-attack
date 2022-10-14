@@ -38,11 +38,12 @@ def show_one_image(images, title):
     plt.show()
 
 
-def show_two_image(images, titles, cmaps=None):
+def show_two_image(images, titles, ):
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     # plt.figure()
     print(images.shape)
     N = images.shape[0]
+    C = images.shape[1]
 
     # image = images.cpu().detach().numpy()[0].transpose(1, 2, 0)
     # plt.imshow(image)
@@ -52,44 +53,42 @@ def show_two_image(images, titles, cmaps=None):
     fig, axes = plt.subplots(1, N, figsize=(2 * N, 2))
     for i in range(N):
         image = images[i].cpu().detach().numpy().transpose(1, 2, 0)
-        axes[i].imshow(image, cmap='gray' if cmaps is None else cmaps[i])
+        if C == 1:
+            axes[i].imshow(image, cmap='gray')
+        else:
+            axes[i].imshow(image)
         axes[i].set_xticks([])
         axes[i].set_yticks([])
         axes[i].set_title(titles[i])
     plt.show()
 
 
-def generate_attack_method(attack_name, model, epsilon, Iterations, Momentum):
-    if attack_name == 'FGSM':
-        atk = torchattacks.FGSM(model, eps=epsilon)
-    elif attack_name == 'I_FGSM':
-        atk = torchattacks.BIM(model, eps=epsilon, alpha=epsilon / Iterations, steps=Iterations, )
-    elif attack_name == 'PGD':
-        atk = torchattacks.PGD(model, eps=epsilon, alpha=epsilon / Iterations, steps=Iterations,
-                               random_start=True)
-    elif attack_name == 'MI_FGSM':
-        atk = torchattacks.MIFGSM(model, eps=epsilon, alpha=epsilon / Iterations, steps=Iterations, decay=Momentum)
-    else:
-        atk = None
-    return atk
+# def generate_attack_method(attack_name, model, epsilon, Iterations, Momentum):
+#     if attack_name == 'FGSM':
+#         atk = torchattacks.FGSM(model, eps=epsilon)
+#     elif attack_name == 'I_FGSM':
+#         atk = torchattacks.BIM(model, eps=epsilon, alpha=epsilon / Iterations, steps=Iterations, )
+#     elif attack_name == 'PGD':
+#         atk = torchattacks.PGD(model, eps=epsilon, alpha=epsilon / Iterations, steps=Iterations,
+#                                random_start=True)
+#     elif attack_name == 'MI_FGSM':
+#         atk = torchattacks.MIFGSM(model, eps=epsilon, alpha=epsilon / Iterations, steps=Iterations, decay=Momentum)
+#     else:
+#         atk = None
+#     return atk
 
 
 def load_model_args(model_name):
     assert os.path.isdir('./Checkpoint'), 'Error: no checkpoint directory found!'
-
     if model_name == 'LeNet5':
         model = lenet5()
     elif model_name == 'FC_256_128':
         model = FC_256_128()
-    elif model_name == 'VGG19':
-        model = models.vgg19(num_classes=10)
-    elif model_name == 'ResNet50':
-        model = models.resnet50(num_classes=10)
-    elif model_name == 'ResNet101':
-        model = models.resnet101(num_classes=10)
-    elif model_name == 'DenseNet121':
-        model = models.densenet121(num_classes=10)
-
+    #     ------ CIFAR10-------
+    elif model_name == 'Res20_CIFAR10':
+        # resnet20_cifar10
+        model = ptcv_get_model("resnet20_cifar10", pretrained=True, root='./Checkpoint')
+        return model, 88.
     elif model_name == 'VGG16_ImageNet':
         model = ptcv_get_model("vgg16", pretrained=True, root='../Checkpoint')
         return model, 76.130
@@ -136,7 +135,7 @@ def load_dataset(dataset, batch_size, is_shuffle=False):
     )
 
     if dataset == 'MNIST':
-        test_dataset = datasets.MNIST(root='../DataSet/MNIST', train=False, transform=data_tf, download=True)
+        test_dataset = datasets.MNIST(root='./DataSet/MNIST', train=False, transform=data_tf, download=True)
         test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
         test_dataset_size = 10000
     elif dataset == 'ImageNet':
@@ -144,7 +143,7 @@ def load_dataset(dataset, batch_size, is_shuffle=False):
         test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
         test_dataset_size = 50000
     elif dataset == 'CIFAR10':
-        test_dataset = datasets.CIFAR10(root='../DataSet/CIFAR10', train=False, transform=data_tf)
+        test_dataset = datasets.CIFAR10(root='./DataSet/CIFAR10', train=False, transform=data_tf, download=True)
         test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
         test_dataset_size = 10000
     else:
@@ -152,21 +151,21 @@ def load_dataset(dataset, batch_size, is_shuffle=False):
     return test_loader, test_dataset_size
 
 
-def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, rate):
+def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, pixel_k):
     if attack_name == 'limited_FGSM':
-        atk = Limited_FGSM(model, eps=eps, sample_rate=rate)
+        atk = Limited_FGSM(model, eps=eps, pixel_k=pixel_k)
         adv_images = atk(images, labels)
         return adv_images
     if attack_name == 'limited_PGD':
-        atk = Limited_PGD(model, eps=eps, alpha=(1.2 * eps) / 20, steps=20, sample_rate=rate)
+        atk = Limited_PGD(model, eps=eps, alpha=(1.5 * eps) / 200, steps=200, pixel_k=pixel_k)
         adv_images = atk(images, labels)
         return adv_images
     if attack_name == 'limited_PGDL2':
-        atk = Limited_PGDL2(model, eps=eps, alpha=0.27, steps=20, sample_rate=rate)
+        atk = Limited_PGDL2(model, eps=eps, alpha=0.27, steps=20, pixel_k=pixel_k)
         adv_images = atk(images, labels)
         return adv_images
     if attack_name == 'limited_CW':
-        atk = Limited_CW2(model, c=1e10, sample_rate=rate)
+        atk = Limited_CW2(model, c=1e5, pixel_k=pixel_k)
         # atk = torchattacks.CW(model, c=1)
         adv_images = atk(images, labels)
         return adv_images
@@ -174,7 +173,7 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, rat
         x0 = images.detach().clone()[0:1]
         labels = labels[0:1]
         original_shape = x0.shape
-        A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, rate)
+        A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, pixel_k)
 
         KP_box[KP_box == 0.0] = 1e-4
         KP_box[KP_box == 1.0] = 1 - 1e-4
@@ -186,7 +185,7 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, rat
 
         def cw_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
             kappa = 0
-            c = 1e9
+            c = 1e5
             KP_box = inf2box(B_inf)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -204,7 +203,7 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, rat
 
         def cw_log_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
             kappa = 0
-            c = 1
+            c = 1e5
             KP_box = inf2box(B_inf)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -222,9 +221,10 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, rat
             cost = L2_loss + c * out1
             return cost
 
-        def pure_lbfgs_attack_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
-            c = 1
-            adv_images = tanh_space(w)
+        def pure_lbfgs_attack_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            c = 1e5
+            KP_box = inf2box(B_inf)
+            adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
             current_L2 = MSELoss(Flatten(adv_images),
                                  Flatten(init_images)).sum(dim=1)
@@ -235,7 +235,8 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, rat
             cost = L2_loss + c * CELoss(outputs, labels)
             return -cost
 
-        res1 = minimize(cw_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
+        # res1 = minimize(cw_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
+        res1 = minimize(pure_lbfgs_attack_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
         # res1 = minimize(cw_log_loss, w.detach().clone(), method='newton-exact',
         #                 # options={'handle_npd': 'cauchy'},
         #                 max_iter=10, tol=1e-5,
@@ -252,7 +253,7 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, rat
     raise RuntimeError('Unknown attack method')
 
 
-def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N, eps, rate):
+def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N, eps, pixel_k):
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
     sample_num = 0.
     epoch_num = 0
@@ -305,7 +306,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
             # 为了保证不越界，全部分类不正确时要及时退出，避免下面的计算
             continue
 
-        pixel_idx = major_contribution_pixels_idx(model, images, labels, rate)
+        pixel_idx = major_contribution_pixels_idx(model, images, labels, pixel_k)
 
         acc_num_before_attack += predict_answer.sum().item()
         # 统计神经网络分类正确的样本的个数总和
@@ -313,7 +314,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
 
         for idx, attack_i in enumerate(attack_method_set):
 
-            images_under_attack = generate_adv_images_by_k_pixels(attack_i, model, images, labels, eps, rate)
+            images_under_attack = generate_adv_images_by_k_pixels(attack_i, model, images, labels, eps, pixel_k)
 
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
             noise = images_under_attack.detach().clone().view(images.shape[0], -1) - \
@@ -349,10 +350,10 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
                 print('predict_correct_element_num: ', predict_correct_index.nelement())
                 titles_1 = (str(labels[0].item()), str(predict[0].item()))
                 # show_one_image(images, 'image_after_' + attack_i)
-                show_two_image(torch.cat([images, images_under_attack], dim=0), titles_1)
+                # show_two_image(torch.cat([images, images_under_attack], dim=0), titles_1)
 
                 # ------ IntegratedGradient ------
-                # select_major_contribution_pixels(model, images, labels, rate=1.0 / 28)
+                # select_major_contribution_pixels(model, images, labels, pixel_k=1)
                 # baseline = torch.zeros_like(images)
                 # ig = IntegratedGradients(model)
                 # titles_2 = (str(labels[0].item()), str(predict[0].item()), 'attributions')
@@ -379,8 +380,8 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
     noise_norm_inf_ave = (noise_norm_inf_total / attack_success_num)
 
     for i in range(len(attack_method_set)):
-        print('eps=%.2f, rate=%.2f, %s ASR=%.2f%%, confidence=%.2f, norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
-            eps, rate,
+        print('eps=%.2f, pixel_k=%d, %s ASR=%.2f%%, confidence=%.2f, norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
+            eps, pixel_k,
             attack_method_set[i],
             attack_success_rate[i],
             confidence_ave[i],
@@ -390,37 +391,43 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
 
     pbar.close()
     print('model acc %.2f' % (acc_num_before_attack / sample_num))
-    return attack_success_rate, confidence_ave, noise_norm2_ave, noise_norm_inf_ave
+    return attack_success_rate, confidence_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
 
 
-def attack_many_model(dataset, model_name_set, attack_method_set, batch_size, eps_set, rate_set):
+def attack_many_model(dataset, model_name_set, attack_N, attack_method_set, batch_size, eps_set, pixel_k_set):
     import datetime
     # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     test_loader, test_dataset_size = load_dataset(dataset, batch_size, is_shuffle=True)
-    data = [['mode_name', 'eps_i', 'rate_i', 'attack_success_list', 'confidence_list', 'perturbation_list']]
-
-    # eps_set = [2],
-    # rate_set = [10. / (28 ** 2), ]
+    res_data = [['dataset', 'mode_name', 'attack_method', 'attack_num', 'eps_i', 'pixel_k',
+                 'attack_success', 'confidence', 'noise_norm1', 'noise_norm2', 'noise_norm_inf']]
 
     for mode_name in model_name_set:
         model, model_acc = load_model_args(mode_name)
         for eps_i in eps_set:
-            for rate_i in rate_set:
-                attack_success_list, confidence_list, noise_norm2_list, noise_norm_inf_list = attack_one_model(
+            for pixel_k in pixel_k_set:
+                attack_success_list, confidence_list, noise_norm1_list, noise_norm2_list, noise_norm_inf_list = attack_one_model(
                     model=model,
                     test_loader=test_loader,
                     test_loader_size=test_dataset_size,
                     attack_method_set=attack_method_set,
-                    N=6,
+                    N=attack_N,
                     eps=eps_i,
-                    rate=rate_i)
-                success_rate, confidence, norm2, norm_inf = attack_success_list.cpu().numpy().tolist(), \
-                                                            confidence_list.cpu().numpy().tolist(), \
-                                                            noise_norm2_list.cpu().numpy().tolist(), \
-                                                            noise_norm_inf_list.cpu().numpy().tolist()
-                data.append([mode_name, eps_i, rate_i, success_rate, confidence, norm2, norm_inf])
-    with open('./Checkpoint/%s.pkl' % ('data',), 'wb') as f:
-        pickle.dump(data, f)
+                    pixel_k=pixel_k)
+                success_rate, confidence, norm1, norm2, norm_inf = attack_success_list.cpu().numpy().tolist(), \
+                                                                   confidence_list.cpu().numpy().tolist(), \
+                                                                   noise_norm1_list.cpu().numpy().tolist(), \
+                                                                   noise_norm2_list.cpu().numpy().tolist(), \
+                                                                   noise_norm_inf_list.cpu().numpy().tolist()
+                for i in range(len(attack_success_list)):
+                    res_data.append([dataset, mode_name, attack_method_set[i], attack_N, eps_i, pixel_k,
+                                     success_rate[i], confidence[i], norm1[i], norm2[i], norm_inf[i]])
+    with open('./Checkpoint/%s_%s.pkl' % ('data', datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")), 'wb') as f:
+        pickle.dump(res_data, f)
+    import pandas as pd
+    test = pd.DataFrame(columns=res_data[0], data=res_data[1:])
+    test.to_csv('./Checkpoint/%s_%s.csv' % ('data', datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")))
+    print(test)
+
     # with open('%s.pkl' % ('pkl'), 'rb') as f:
     #     basic_info = pickle.load(f)
 
@@ -457,56 +464,38 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(123)
 
     batch_size = 1
+    attack_N = 500
+    pixel_k_set = [5, 10, 15, 20]
+    # pixel_k_set = [20]
     attack_method_set = [
         'limited_BFGS',
-        # 'limited_FGSM',
-        # 'limited_PGD',
-        # 'limited_PGDL2',
-        # 'limited_CW',
+        'limited_FGSM',
+        'limited_PGD',
+        'limited_CW',
     ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
     mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
-    # cifar10_model_name_set = ['VGG16', ]  # 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121'
+    cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121'
     # imagenet_model_name_set = ['ResNet50_ImageNet']
     # 'DenseNet161_ImageNet','ResNet50_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
 
     attack_many_model('MNIST',
-                      mnist_model_name_set, attack_method_set,
+                      mnist_model_name_set,
+                      attack_N,
+                      attack_method_set,
                       batch_size,
-                      eps_set=[0.5],
-                      rate_set=[20. / (28 ** 2), ]
+                      eps_set=[1.0],
+                      pixel_k_set=pixel_k_set
                       )
-    #
-    # attack_many_model('CIFAR10',
-    #                   cifar10_model_name_set, attack_method_set,
-    #                   batch_size,
-    #                   work_name='adam_fgsm_cifar',
-    #                   Epsilon_set=[5],
-    #                   Iterations_set=[10],
-    #                   Momentum=1.0)
 
-    # attack_many_model('ImageNet',
-    #                   imagenet_model_name_set, attack_method_set,
-    #                   batch_size,
-    #                   work_name='adam_fgsm_imagenet',
-    #                   Epsilon_set=[3],
-    #                   Iterations_set=[10],
-    #                   Momentum=1.0)
+    attack_many_model('CIFAR10',
+                      cifar10_model_name_set,
+                      attack_N,
+                      attack_method_set,
+                      batch_size,
+                      eps_set=[1.0],
+                      pixel_k_set=pixel_k_set
+                      )
 
-    # VGG16 pao yi xia
-    # attack_many_model('ImageNet',
-    #                   imagenet_model_name_set, attack_method_set,
-    #                   batch_size,
-    #                   work_name='imagenet_iteration_compare',
-    #                   Epsilon_set=[5],
-    #                   Iterations_set=[1, 4, 8, 12, 16, 20],
-    #                   Momentum=1.0)
-    #
-    # attack_many_model(model_name_set, attack_method_set,
-    #                   batch_size,
-    #                   work_name='iterations_compare',
-    #                   Epsilon_set=[5],
-    #                   Iterations_set=[1],
-    #                   Momentum=0.9)
     print("ALL WORK HAVE BEEN DONE!!!")
 
 '''
@@ -590,7 +579,7 @@ def generate_adv_images(attack_name, model, images, labels, options):
         x0 = images[0:1]
         labels = labels[0:1]
         original_shape = x0.shape
-        A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, rate=10. / 28)
+        A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, pixel_k=1)
 
         KP_box[KP_box == 0.0] = 1. / 255 * 0.1
         KP_box[KP_box == 1.0] = 1. - 1. / 255 * 0.1

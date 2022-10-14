@@ -31,10 +31,10 @@ class Limited_FGSM(Attack):
 
     """
 
-    def __init__(self, model, eps=0.007, sample_rate=0.1):
+    def __init__(self, model, eps=0.007, pixel_k=1):
         super().__init__("Limited_FGSM", model)
         self.eps = eps
-        self.sample_rate = sample_rate
+        self.pixel_k = pixel_k
         self._supported_mode = ['default', 'targeted']
 
     def forward(self, images, labels):
@@ -48,7 +48,7 @@ class Limited_FGSM(Attack):
         # KP is a matrix, size is k*1
         # RP is a matrix, size is n*1
         original_shape = images_origin.shape
-        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, rate=self.sample_rate)
+        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, pixel_k=self.pixel_k)
         KP_origin = KP.detach().clone()
         KP = KP.requires_grad_(True)
 
@@ -103,12 +103,12 @@ class Limited_PGD(Attack):
     """
 
     def __init__(self, model, eps=0.3,
-                 alpha=2 / 255, steps=40, sample_rate=0.1, random_start=True):
+                 alpha=2 / 255, steps=40, pixel_k=1, random_start=True):
         super().__init__("Limited_PGD", model)
         self.eps = eps
         self.alpha = alpha
         self.steps = steps
-        self.sample_rate = sample_rate
+        self.pixel_k = pixel_k
         self.random_start = random_start
         self._supported_mode = ['default', 'targeted']
 
@@ -124,7 +124,7 @@ class Limited_PGD(Attack):
         # RP is a matrix, size is n*1
 
         original_shape = images_origin.shape
-        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, self.sample_rate)
+        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, self.pixel_k)
 
         def reconstruct_image(KP):
             adv_images = (A.mm(KP) + RP).reshape(original_shape)
@@ -195,14 +195,14 @@ class Limited_PGDL2(Attack):
     """
 
     def __init__(self, model, eps=1.0, alpha=0.2, steps=40, random_start=False, eps_for_division=1e-10,
-                 sample_rate=0.1):
+                 pixel_k=1):
         super().__init__("Limited_PGDL2", model)
         self.eps = eps
         self.alpha = alpha
         self.steps = steps
         self.random_start = random_start
         self.eps_for_division = eps_for_division
-        self.sample_rate = sample_rate
+        self.pixel_k = pixel_k
         self._supported_mode = ['default', 'targeted']
 
     def forward(self, images, labels):
@@ -217,7 +217,7 @@ class Limited_PGDL2(Attack):
         # RP is a matrix, size is n*1
 
         original_shape = images_origin.shape
-        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, self.sample_rate)
+        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, self.pixel_k)
 
         def reconstruct_image(KP):
             adv_images = (A.mm(KP) + RP).reshape(original_shape)
@@ -283,23 +283,27 @@ class Limited_CW2(Attack):
     Paper link: https://arxiv.org/abs/1608.04644
     """
 
-    def __init__(self, model, c=1, kappa=0, steps=1000, lr=0.01, binary_search=5, sample_rate=0.1):
+    def __init__(self, model, c=1, kappa=0, steps=200, lr=0.01, binary_search=1, pixel_k=1):
         super().__init__("Limited_CW2", model)
         self.c = c
         self.kappa = kappa
         self.steps = steps
         self.lr = lr
-        self.sample_rate = sample_rate
+        self.pixel_k = pixel_k
         self.binary_search_steps = binary_search
         self._supported_mode = ['default', 'targeted']
 
     def forward(self, images, labels):
         # 本方法还是主要讨论无定向攻击
-
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         img = images.clone().detach()
         pre_label = labels.clone().detach()
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        A, KP, RP = select_major_contribution_pixels(self.model, img, labels, self.pixel_k)
+
+        def reconstruct_image(adv_KP):
+            adv_images = (A.mm(adv_KP) + RP).reshape(original_shape)
+            return adv_images
 
         # 定向
         if self._targeted:
@@ -308,31 +312,22 @@ class Limited_CW2(Attack):
         else:
             # 攻击目标标签 必须使用one hot编码
             tlab = F.one_hot(pre_label, num_classes=10)
-            # Variable(torch.from_numpy(np.eye(num_labels)[pre_label]).to(device).float())
-        # boxmin, boxmax = self.model.bounds()
-        # print("boxmin={}, boxmax={}".format(boxmin, boxmax))
-        # logging.info("boxmin={}, boxmax={}".format(boxmin, boxmax))
-        # print(tlab)
 
         # c的初始化边界
+        upper_bound = 1e5
         lower_bound = 0
         c = self.c
-        upper_bound = 1e10
+        o_c = -1
+
         # the best l2, score, and image attack
         o_bestl2 = 1e10
         o_bestscore = -1
-        # o_bestattack = None
-        # the resulting image, tanh'd to keep bounded from boxmin to boxmax
+        o_bestattack = images.clone().detach()
         original_shape = images.shape
-        A, KP, RP = select_major_contribution_pixels(self.model, img, labels, self.sample_rate)
 
         adv_KP = KP.clone().detach()
         adv_KP[adv_KP == 0.0] = 1e-5
         adv_KP[adv_KP == 1.0] = 1. - 1e-5
-
-        def reconstruct_image(adv_KP):
-            adv_images = (A.mm(adv_KP) + RP).reshape(original_shape)
-            return adv_images
 
         # 把原始图像转换成图像数据和扰动的形态
         w = self.box2inf(adv_KP.detach())
@@ -341,6 +336,7 @@ class Limited_CW2(Attack):
         optimizer = torch.optim.Adam([w], lr=self.lr)
 
         for outer_step in range(self.binary_search_steps):
+            # inner_attack_success = False
             for iteration in range(1, self.steps + 1):
                 optimizer.zero_grad()
                 # 定义新输入
@@ -363,8 +359,10 @@ class Limited_CW2(Attack):
                 # 这里的的 c 相当于调节系数
                 loss1 = self.c * loss1
                 loss = loss1 + loss2
+
                 loss.backward(retain_graph=True)
                 optimizer.step()
+
                 l2 = loss2.detach()
                 # 输出的是概率
                 # pro=F.softmax(self._model(new_img),dim=1)[0].data.cpu().numpy()[target_label]
@@ -390,17 +388,19 @@ class Limited_CW2(Attack):
                     #     o_bestscore = pred
                     #     o_bestattack = new_img.data.cpu().numpy()
                 else:
-                    # 更新l2范数，和 adv_img
-                    if (l2 < o_bestl2) and (pred != pre_label):
+                    # 攻击成功则更新 l2 范数，和 adv_img
+                    # 因为每一轮迭代都能找到比上一次较好的值，
+                    # 因此只要本次迭代是成功的，那就认为本次迭代得到的结果是比较好的
+                    if (l2 < o_bestl2) and (pred[0] != pre_label[0]):
                         # print("attack success l2={} target_label={} pro={}".format(l2,target_label,pro))
                         # print("attack success l2={} label={}".format(l2,pred))
                         # logging.info("attack success l2={} label={}".format(l2, pred))
+                        # inner_attack_success=True
                         o_bestl2 = l2
                         o_bestscore = pred
-                        # o_bestattack = new_img.data.cpu().numpy()
+                        o_bestattack = reconstruct_image(self.inf2box(w.detach()))
 
-            confidence_old = -1
-
+            # -------------外循环判定-----------
             if self._targeted:
                 pass
                 # if (o_bestscore == target_label) and (o_bestscore != -1):
@@ -408,35 +408,37 @@ class Limited_CW2(Attack):
                 #     upper_bound = min(upper_bound, c)
                 #     if upper_bound < 1e9:
                 #         print()
-                #         confidence_old = c
+                #         o_c = c
                 #         c = (lower_bound + upper_bound) / 2
                 # else:
                 #     lower_bound = max(lower_bound, c)
-                #     confidence_old = c
+                #     o_c = c
                 #     if upper_bound < 1e9:
                 #         c = (lower_bound + upper_bound) / 2
                 #     else:
                 #         c *= 10
 
             else:
-                # 如果攻击成功，那我们就要进行二分查找，重新迭代
+                # 这里有一个不合理的地方：只要有一次内循环攻击成功，超参数c就一直在变小.
+                # 那我们就要进行二分查找，重新迭代
                 if (o_bestscore != pre_label) and (o_bestscore != -1):
                     # 攻击成功 减小c
                     upper_bound = min(upper_bound, c)
                     if upper_bound < 1e9:
-                        confidence_old = c
+                        o_c = c
                         c = (lower_bound + upper_bound) / 2
-                # 如果没攻击成功，那我们就扩大c
+                # 如果之前都没攻击成功，那我们就扩大c
                 else:
                     lower_bound = max(lower_bound, c)
-                    confidence_old = c
+                    o_c = c
                     if upper_bound < 1e9:
                         c = (lower_bound + upper_bound) / 2
                     else:
                         c *= 10
+                        c = max(1e5, c)
 
-            # print("outer_step={} c {}->{}".format(outer_step,confidence_old,c))
-            # logging.info("outer_step={} c {}->{}".format(outer_step, confidence_old, c))
+            # print("outer_step={} c {}->{}".format(outer_step,o_c,c))
+            # logging.info("outer_step={} c {}->{}".format(outer_step, o_c, c))
         # print(o_bestattack)
 
         # if o_bestscore != -1:
@@ -448,8 +450,9 @@ class Limited_CW2(Attack):
         #     """
         #     if adversary.try_accept_the_example(o_bestattack, o_bestscore):
         #         return adversary
-        adv_image = reconstruct_image(self.inf2box(w.detach()))
-        return adv_image
+        # adv_image = reconstruct_image(self.inf2box(w.detach()))
+        o_bestattack
+        return o_bestattack
 
     def inf2box(self, x):
         '''
@@ -502,13 +505,13 @@ class Limited_CW(Attack):
 
     """
 
-    def __init__(self, model, c=1e-4, kappa=0, steps=1000, lr=0.01, sample_rate=0.1):
+    def __init__(self, model, c=1e-4, kappa=0, steps=1000, lr=0.01, pixel_k=1):
         super().__init__("Limited_CW", model)
         self.c = c
         self.kappa = kappa
         self.steps = steps
         self.lr = lr
-        self.sample_rate = sample_rate
+        self.pixel_k = pixel_k
         self._supported_mode = ['default', 'targeted']
 
     def forward(self, images, labels):
@@ -522,7 +525,7 @@ class Limited_CW(Attack):
             target_labels = self._get_target_label(images, labels)
 
         original_shape = images_origin.shape
-        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, self.sample_rate)
+        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, self.pixel_k)
 
         adv_KP = KP.clone().detach()
         adv_KP[adv_KP == 0.0] = 1. / 255 * 0.1

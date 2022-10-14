@@ -30,9 +30,11 @@ def box2inf(x):
     return torch.atanh(2.0 * x - 1.)
 
 
-def major_contribution_pixels_idx(model, images, labels, rate):
+def major_contribution_pixels_idx(model, images, labels, pixel_k):
     n = images.numel()
-    k = int(n * rate)
+    k = pixel_k
+    if k > n:
+        raise RuntimeError('the pixel_k is more than the number of pixels in images')
     baseline = torch.zeros_like(images)
     ig = IntegratedGradients(model)
     # attributions 表明每一个贡献点对最终决策（正确的标签）的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
@@ -47,12 +49,12 @@ def major_contribution_pixels_idx(model, images, labels, rate):
     return idx
 
 
-def select_major_contribution_pixels(model, images, labels, rate):
+def select_major_contribution_pixels(model, images, labels, pixel_k):
     """
     Inputs
         model,
         images X: denote a image as a vector X with length n
-        rate: set the number of major attribution pixel
+        pixel_k: set the number of major attribution pixel
     Outputs
         the matrix A: we denote the major attributions K Pixels as a vector KP with length k,
         so we can get a matrix A that satisfies  X = A*KP, where the size of A is n*k, the size of X is n*1,
@@ -64,13 +66,17 @@ def select_major_contribution_pixels(model, images, labels, rate):
             2.1 so fist the pixel position must be in conjunction with the attributions value.
             2.2 find the top-k pixel position where pixels have higher attributions value.
     """
-    shape = images.shape
     n = images.numel()
-    k = int(n * rate)
+    k = pixel_k
+    if k > n:
+        raise RuntimeError('the pixel_k is more than the number of pixels in images')
+    if images.shape[0] > 1:
+        raise RuntimeError('the batch size of images must be 1')
+
     A = torch.zeros(size=(n, k), device=images.device, dtype=torch.float)
     # KP = torch.zeros(k, device=images.device, dtype=torch.float)
     # 找到矩阵A, 满足 image = A*KP+RP, A:n*k; KP:k*1; C:n*1
-    idx = major_contribution_pixels_idx(model, images, labels, rate)
+    idx = major_contribution_pixels_idx(model, images, labels, pixel_k)
 
     KP = images.detach().clone().flatten()[idx].view(-1, 1)
 
