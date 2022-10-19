@@ -2,6 +2,7 @@ import torch
 import torchattacks
 import torchvision.models
 import torchvision.models as models
+from captum.attr import IntegratedGradients
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tqdm import tqdm
@@ -24,6 +25,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import time
 
 from advertorch.attacks import LBFGSAttack
 
@@ -38,7 +40,7 @@ def show_one_image(images, title):
     plt.show()
 
 
-def show_two_image(images, titles, ):
+def show_images(images, titles, ):
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     # plt.figure()
     print(images.shape)
@@ -61,6 +63,7 @@ def show_two_image(images, titles, ):
         axes[i].set_yticks([])
         axes[i].set_title(titles[i])
     plt.show()
+    fig.savefig('pixel_selecor.pdf')
 
 
 # def generate_attack_method(attack_name, model, epsilon, Iterations, Momentum):
@@ -84,11 +87,16 @@ def load_model_args(model_name):
         model = lenet5()
     elif model_name == 'FC_256_128':
         model = FC_256_128()
-    #     ------ CIFAR10-------
+    # ------ CIFAR10-------
     elif model_name == 'Res20_CIFAR10':
         # resnet20_cifar10
         model = ptcv_get_model("resnet20_cifar10", pretrained=True, root='./Checkpoint')
         return model, 88.
+    # --------SVHN--------
+    elif model_name == 'Res20_SVHN':
+        model = ptcv_get_model("resnet20_svhn", pretrained=True, root='./Checkpoint')
+        return model, 88.
+    # --------ImageNet--------
     elif model_name == 'VGG16_ImageNet':
         model = ptcv_get_model("vgg16", pretrained=True, root='../Checkpoint')
         return model, 76.130
@@ -110,7 +118,7 @@ def load_model_args(model_name):
         # model = torchvision.models.densenet121(pretrained=True)
         return model, 100 - 21.91
     else:
-        model = models.vgg16(num_classes=10)
+        raise RuntimeError('Unknown model!!!')
     check_point = torch.load('./Checkpoint/%s.pth' % (model_name), map_location='cuda:0')
     model.load_state_dict(check_point['model'])
     print(model_name, 'has been load！', check_point['test_acc'])
@@ -146,6 +154,10 @@ def load_dataset(dataset, batch_size, is_shuffle=False):
         test_dataset = datasets.CIFAR10(root='./DataSet/CIFAR10', train=False, transform=data_tf, download=True)
         test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
         test_dataset_size = 10000
+    elif dataset == 'SVHN':
+        test_dataset = datasets.SVHN(root='./DataSet/SVHN', split='test', transform=data_tf, download=True)
+        test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
+        test_dataset_size = 10000
     else:
         test_loader, test_dataset_size = None, 0
     return test_loader, test_dataset_size
@@ -153,23 +165,36 @@ def load_dataset(dataset, batch_size, is_shuffle=False):
 
 def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, pixel_k):
     if attack_name == 'limited_FGSM':
+        start = time.perf_counter()
         atk = Limited_FGSM(model, eps=eps, pixel_k=pixel_k)
         adv_images = atk(images, labels)
-        return adv_images
+        end = time.perf_counter()
+        return adv_images, end - start
+
     if attack_name == 'limited_PGD':
+        start = time.perf_counter()
         atk = Limited_PGD(model, eps=eps, alpha=(1.5 * eps) / 200, steps=200, pixel_k=pixel_k)
         adv_images = atk(images, labels)
-        return adv_images
-    if attack_name == 'limited_PGDL2':
-        atk = Limited_PGDL2(model, eps=eps, alpha=0.27, steps=20, pixel_k=pixel_k)
-        adv_images = atk(images, labels)
-        return adv_images
+        end = time.perf_counter()
+        return adv_images, end - start
+
+    # if attack_name == 'limited_PGDL2':
+    #     start = time.perf_counter()
+    #     atk = Limited_PGDL2(model, eps=eps, alpha=0.27, steps=20, pixel_k=pixel_k)
+    #     adv_images = atk(images, labels)
+    #     end = time.perf_counter()
+    #     return adv_images, end - start
+
     if attack_name == 'limited_CW':
+        start = time.perf_counter()
         atk = Limited_CW2(model, c=1e5, pixel_k=pixel_k)
         # atk = torchattacks.CW(model, c=1)
         adv_images = atk(images, labels)
-        return adv_images
+        end = time.perf_counter()
+        return adv_images, end - start
+
     if attack_name == 'limited_BFGS':
+        start = time.perf_counter()
         x0 = images.detach().clone()[0:1]
         labels = labels[0:1]
         original_shape = x0.shape
@@ -249,7 +274,9 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, pix
         # adversary = LBFGSAttack(predict=model, initial_const=100000, num_classes=10)
         # adv_image = adversary.perturb(images.detach().clone(), y=labels.detach().clone())
         # print(torch.sum((adv_image == images)))
-        return adv_images
+        end = time.perf_counter()
+        return adv_images, end - start
+
     raise RuntimeError('Unknown attack method')
 
 
@@ -262,6 +289,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
 
     attack_success_num = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
 
+    time_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
     confidence_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
     noise_norm1_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
     noise_norm2_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
@@ -314,8 +342,9 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
 
         for idx, attack_i in enumerate(attack_method_set):
 
-            images_under_attack = generate_adv_images_by_k_pixels(attack_i, model, images, labels, eps, pixel_k)
-
+            images_under_attack, time_i = generate_adv_images_by_k_pixels(attack_i, model, images, labels, eps, pixel_k)
+            b = images_under_attack.shape[0]
+            time_i = torch.as_tensor([time_i] * b, device=device).view(b, -1)
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
             noise = images_under_attack.detach().clone().view(images.shape[0], -1) - \
                     images.detach().clone().view(images.shape[0], -1)
@@ -335,25 +364,33 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
             selector = labels != predict
             attack_success_index = torch.flatten(torch.nonzero(labels != predict))
             # print('predict_correct_index', predict_correct_index)
+            valid_time = torch.index_select(time_i, 0, attack_success_index)
             valid_confidence = torch.index_select(confidence, 0, attack_success_index)
             valid_noise_norm1 = torch.index_select(noise_norm1, 0, attack_success_index)
             valid_noise_norm2 = torch.index_select(noise_norm2, 0, attack_success_index)
-            # if valid_noise_norm2==
             valid_noise_norm_inf = torch.index_select(noise_norm_inf, 0, attack_success_index)
-            a = valid_confidence.sum().item()
+
+            time_total[idx] = valid_time.sum().item()
             confidence_total[idx] += valid_confidence.sum().item()
             noise_norm1_total[idx] += valid_noise_norm1.sum().item()
             noise_norm2_total[idx] += valid_noise_norm2.sum().item()
             noise_norm_inf_total[idx] += valid_noise_norm_inf.sum().item()
 
-            if epoch_num == 1:
-                print('predict_correct_element_num: ', predict_correct_index.nelement())
-                titles_1 = (str(labels[0].item()), str(predict[0].item()))
+            # if epoch_num == 1:
+            #     print('predict_correct_element_num: ', predict_correct_index.nelement())
+                # titles_1 = (str(labels[0].item()), str(predict[0].item()))
                 # show_one_image(images, 'image_after_' + attack_i)
-                # show_two_image(torch.cat([images, images_under_attack], dim=0), titles_1)
+                # show_images(torch.cat([images, images_under_attack], dim=0), titles_1)
 
                 # ------ IntegratedGradient ------
                 # select_major_contribution_pixels(model, images, labels, pixel_k=1)
+                # #     attributions_abs_img = (attributions_abs - attributions_abs.min()) / (
+                # #             attributions_abs.max() - attributions_abs.min())
+                # # images_show = torch.cat([images, attributions_abs_img, AKP.reshape(shape), RP.reshape(shape)], dim=0)
+                # # show_two_image(images_show,
+                # #                titles=['origin', 'attribution heatmap', 'major contribution pixels', 'the rest pixels'],
+                # #                cmaps=['gray', 'rainbow', 'gray', 'gray'])
+                # --------------- ------------
                 # baseline = torch.zeros_like(images)
                 # ig = IntegratedGradients(model)
                 # titles_2 = (str(labels[0].item()), str(predict[0].item()), 'attributions')
@@ -363,7 +400,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
                 # attributions = torch.abs(attributions)
                 # attributions = (attributions - torch.min(attributions)) / (
                 #         torch.max(attributions) - torch.min(attributions))
-                # show_two_image(torch.cat([images, images_under_attack, attributions], dim=0), titles_2)
+                # show_images(torch.cat([images, images_under_attack, attributions], dim=0), titles_2)
                 # print('IG Attributions:', attributions)
                 # print('Convergence Delta:', delta)
 
@@ -374,58 +411,64 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
     print(attack_success_num)
     attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
     # attack_success_num[attack_success_num == 0] = float('inf'), 防止出现除 0 溢出 inf
+    time_ave = (time_total / attack_success_num)
     confidence_ave = (confidence_total / attack_success_num)
     noise_norm1_ave = (noise_norm1_total / attack_success_num)
     noise_norm2_ave = (noise_norm2_total / attack_success_num)
     noise_norm_inf_ave = (noise_norm_inf_total / attack_success_num)
 
     for i in range(len(attack_method_set)):
-        print('eps=%.2f, pixel_k=%d, %s ASR=%.2f%%, confidence=%.2f, norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
-            eps, pixel_k,
-            attack_method_set[i],
-            attack_success_rate[i],
-            confidence_ave[i],
-            noise_norm1_ave[i],
-            noise_norm2_ave[i],
-            noise_norm_inf_ave[i]))
+        print(
+            'eps=%.2f, pixel_k=%d, %s ASR=%.2f%%,time=%.2f(\mu s) confidence=%.2f, norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
+                eps, pixel_k,
+                attack_method_set[i],
+                attack_success_rate[i],
+                time_ave[i],
+                confidence_ave[i],
+                noise_norm1_ave[i],
+                noise_norm2_ave[i],
+                noise_norm_inf_ave[i]))
 
     pbar.close()
     print('model acc %.2f' % (acc_num_before_attack / sample_num))
-    return attack_success_rate, confidence_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
+    return attack_success_rate, time_ave, confidence_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
 
 
-def attack_many_model(dataset, model_name_set, attack_N, attack_method_set, batch_size, eps_set, pixel_k_set):
+def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_method_set, batch_size, eps_set,
+                      pixel_k_set):
     import datetime
     # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    test_loader, test_dataset_size = load_dataset(dataset, batch_size, is_shuffle=True)
     res_data = [['dataset', 'mode_name', 'attack_method', 'attack_num', 'eps_i', 'pixel_k',
-                 'attack_success', 'confidence', 'noise_norm1', 'noise_norm2', 'noise_norm_inf']]
-
-    for mode_name in model_name_set:
-        model, model_acc = load_model_args(mode_name)
-        for eps_i in eps_set:
-            for pixel_k in pixel_k_set:
-                attack_success_list, confidence_list, noise_norm1_list, noise_norm2_list, noise_norm_inf_list = attack_one_model(
-                    model=model,
-                    test_loader=test_loader,
-                    test_loader_size=test_dataset_size,
-                    attack_method_set=attack_method_set,
-                    N=attack_N,
-                    eps=eps_i,
-                    pixel_k=pixel_k)
-                success_rate, confidence, norm1, norm2, norm_inf = attack_success_list.cpu().numpy().tolist(), \
-                                                                   confidence_list.cpu().numpy().tolist(), \
-                                                                   noise_norm1_list.cpu().numpy().tolist(), \
-                                                                   noise_norm2_list.cpu().numpy().tolist(), \
-                                                                   noise_norm_inf_list.cpu().numpy().tolist()
-                for i in range(len(attack_success_list)):
-                    res_data.append([dataset, mode_name, attack_method_set[i], attack_N, eps_i, pixel_k,
-                                     success_rate[i], confidence[i], norm1[i], norm2[i], norm_inf[i]])
-    with open('./Checkpoint/%s_%s.pkl' % ('data', datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")), 'wb') as f:
+                 'attack_success', 'time', 'confidence', 'noise_norm1', 'noise_norm2', 'noise_norm_inf']]
+    for set_i, dataset_i in enumerate(dataset):
+        test_loader, test_dataset_size = load_dataset(dataset_i, batch_size, is_shuffle=True)
+        for mode_name in model_name_set[set_i]:
+            model, model_acc = load_model_args(mode_name)
+            for eps_i in eps_set:
+                for pixel_k in pixel_k_set:
+                    success_rate_list, time_list, confidence_list, noise_norm1_list, noise_norm2_list, noise_norm_inf_list = attack_one_model(
+                        model=model,
+                        test_loader=test_loader,
+                        test_loader_size=test_dataset_size,
+                        attack_method_set=attack_method_set,
+                        N=attack_N,
+                        eps=eps_i,
+                        pixel_k=pixel_k)
+                    success_rate, time, confidence, norm1, norm2, norm_inf = success_rate_list.cpu().numpy().tolist(), \
+                                                                             time_list.cpu().numpy().tolist(), \
+                                                                             confidence_list.cpu().numpy().tolist(), \
+                                                                             noise_norm1_list.cpu().numpy().tolist(), \
+                                                                             noise_norm2_list.cpu().numpy().tolist(), \
+                                                                             noise_norm_inf_list.cpu().numpy().tolist()
+                    for i in range(len(success_rate_list)):
+                        res_data.append([dataset_i, mode_name, attack_method_set[i], attack_N, eps_i, pixel_k,
+                                         success_rate[i], time[i], confidence[i], norm1[i], norm2[i], norm_inf[i]])
+    current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    with open('./Checkpoint/%s_%s.pkl' % (job_name, current_time), 'wb') as f:
         pickle.dump(res_data, f)
     import pandas as pd
     test = pd.DataFrame(columns=res_data[0], data=res_data[1:])
-    test.to_csv('./Checkpoint/%s_%s.csv' % ('data', datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")))
+    test.to_csv('./Checkpoint/%s_%s.csv' % (job_name, datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")))
     print(test)
 
     # with open('%s.pkl' % ('pkl'), 'rb') as f:
@@ -464,22 +507,27 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(123)
 
     batch_size = 1
-    attack_N = 500
+    attack_N = 1000
+    # pixel_k_set = [20]
     pixel_k_set = [5, 10, 15, 20]
     # pixel_k_set = [20]
     attack_method_set = [
         'limited_BFGS',
         'limited_FGSM',
-        'limited_PGD',
+        # 'limited_PGD',
         'limited_CW',
     ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
     mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
     cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121'
+    svhn_model_name_set = ['Res20_SVHN']
     # imagenet_model_name_set = ['ResNet50_ImageNet']
     # 'DenseNet161_ImageNet','ResNet50_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
-
-    attack_many_model('MNIST',
-                      mnist_model_name_set,
+    job_name = 'mnist_cifar_1000'
+    attack_many_model(job_name,
+                      # ['MNIST', 'CIFAR10','SVHN'],
+                      ['MNIST', 'CIFAR10'],
+                      # [mnist_model_name_set, cifar10_model_name_set,svhn_model_name_set],
+                      [mnist_model_name_set, cifar10_model_name_set],
                       attack_N,
                       attack_method_set,
                       batch_size,
@@ -487,14 +535,14 @@ if __name__ == '__main__':
                       pixel_k_set=pixel_k_set
                       )
 
-    attack_many_model('CIFAR10',
-                      cifar10_model_name_set,
-                      attack_N,
-                      attack_method_set,
-                      batch_size,
-                      eps_set=[1.0],
-                      pixel_k_set=pixel_k_set
-                      )
+    # attack_many_model('CIFAR10',
+    #                   cifar10_model_name_set,
+    #                   attack_N,
+    #                   attack_method_set,
+    #                   batch_size,
+    #                   eps_set=[1.0],
+    #                   pixel_k_set=pixel_k_set
+    #                   )
 
     print("ALL WORK HAVE BEEN DONE!!!")
 

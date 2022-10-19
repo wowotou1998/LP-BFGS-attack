@@ -86,12 +86,7 @@ def select_major_contribution_pixels(model, images, labels, pixel_k):
         A[idx[i].item()][i] = 1
     A_KP = A.mm(KP)
     RP = images.detach().clone().flatten().view(-1, 1) - A_KP
-    #     attributions_abs_img = (attributions_abs - attributions_abs.min()) / (
-    #             attributions_abs.max() - attributions_abs.min())
-    # images_show = torch.cat([images, attributions_abs_img, AKP.reshape(shape), RP.reshape(shape)], dim=0)
-    # show_two_image(images_show,
-    #                titles=['origin', 'attribution heatmap', 'major contribution pixels', 'the rest pixels'],
-    #                cmaps=['gray', 'rainbow', 'gray', 'gray'])
+
     # A is a matrix, size is n*k
     # KP is a matrix, size is k*1
     # RP is a matrix, size is n*1
