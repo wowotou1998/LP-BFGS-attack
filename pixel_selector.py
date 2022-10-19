@@ -8,7 +8,7 @@ from captum.attr import (
     NeuronConductance,
     NoiseTunnel,
 )
-
+from attack_models import show_images
 
 def tanh_space(x):
     return 1 / 2 * (torch.tanh(x) + 1)
@@ -31,6 +31,7 @@ def box2inf(x):
 
 
 def major_contribution_pixels_idx(model, images, labels, pixel_k):
+    # Only output the
     n = images.numel()
     k = pixel_k
     if k > n:
@@ -46,7 +47,7 @@ def major_contribution_pixels_idx(model, images, labels, pixel_k):
     attributions_abs_flat = attributions_abs.flatten()
     v, idx = attributions_abs_flat.sort(descending=True)
     idx = idx[0:k]
-    return idx
+    return idx, attributions_abs
 
 
 def select_major_contribution_pixels(model, images, labels, pixel_k):
@@ -76,7 +77,7 @@ def select_major_contribution_pixels(model, images, labels, pixel_k):
     A = torch.zeros(size=(n, k), device=images.device, dtype=torch.float)
     # KP = torch.zeros(k, device=images.device, dtype=torch.float)
     # 找到矩阵A, 满足 image = A*KP+RP, A:n*k; KP:k*1; C:n*1
-    idx = major_contribution_pixels_idx(model, images, labels, pixel_k)
+    idx, attributions_abs = major_contribution_pixels_idx(model, images, labels, pixel_k)
 
     KP = images.detach().clone().flatten()[idx].view(-1, 1)
 
@@ -86,6 +87,16 @@ def select_major_contribution_pixels(model, images, labels, pixel_k):
         A[idx[i].item()][i] = 1
     A_KP = A.mm(KP)
     RP = images.detach().clone().flatten().view(-1, 1) - A_KP
+
+    # --------
+    shape = images.shape
+    attributions_abs_img = (attributions_abs - attributions_abs.min()) / (
+                attributions_abs.max() - attributions_abs.min())
+    images_show = torch.cat([images, attributions_abs_img, A_KP.reshape(shape), RP.reshape(shape)], dim=0)
+    show_images(images_show,
+                   titles=['origin', 'attribution heatmap', 'important k pixels', 'the rest pixels'],
+                   )
+    # --------
 
     # A is a matrix, size is n*k
     # KP is a matrix, size is k*1

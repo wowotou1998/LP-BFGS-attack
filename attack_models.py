@@ -44,7 +44,7 @@ def show_images(images, titles, ):
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     # plt.figure()
     print(images.shape)
-    N = images.shape[0]
+    B = images.shape[0]
     C = images.shape[1]
 
     # image = images.cpu().detach().numpy()[0].transpose(1, 2, 0)
@@ -52,8 +52,8 @@ def show_images(images, titles, ):
     # plt.title(title)
     # plt.show()
 
-    fig, axes = plt.subplots(1, N, figsize=(2 * N, 2))
-    for i in range(N):
+    fig, axes = plt.subplots(1, B, figsize=(2 * B, 2))
+    for i in range(B):
         image = images[i].cpu().detach().numpy().transpose(1, 2, 0)
         if C == 1:
             axes[i].imshow(image, cmap='gray')
@@ -334,14 +334,13 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
             # 为了保证不越界，全部分类不正确时要及时退出，避免下面的计算
             continue
 
-        pixel_idx = major_contribution_pixels_idx(model, images, labels, pixel_k)
+        pixel_idx, attribution_abs = major_contribution_pixels_idx(model, images, labels, pixel_k)
 
         acc_num_before_attack += predict_answer.sum().item()
         # 统计神经网络分类正确的样本的个数总和
         # valid_attack_num += labels.shape[0]
 
         for idx, attack_i in enumerate(attack_method_set):
-
             images_under_attack, time_i = generate_adv_images_by_k_pixels(attack_i, model, images, labels, eps, pixel_k)
             b = images_under_attack.shape[0]
             time_i = torch.as_tensor([time_i] * b, device=device).view(b, -1)
@@ -378,33 +377,33 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
 
             # if epoch_num == 1:
             #     print('predict_correct_element_num: ', predict_correct_index.nelement())
-                # titles_1 = (str(labels[0].item()), str(predict[0].item()))
-                # show_one_image(images, 'image_after_' + attack_i)
-                # show_images(torch.cat([images, images_under_attack], dim=0), titles_1)
+            # titles_1 = (str(labels[0].item()), str(predict[0].item()))
+            # show_one_image(images, 'image_after_' + attack_i)
+            # show_images(torch.cat([images, images_under_attack], dim=0), titles_1)
 
-                # ------ IntegratedGradient ------
-                # select_major_contribution_pixels(model, images, labels, pixel_k=1)
-                # #     attributions_abs_img = (attributions_abs - attributions_abs.min()) / (
-                # #             attributions_abs.max() - attributions_abs.min())
-                # # images_show = torch.cat([images, attributions_abs_img, AKP.reshape(shape), RP.reshape(shape)], dim=0)
-                # # show_two_image(images_show,
-                # #                titles=['origin', 'attribution heatmap', 'major contribution pixels', 'the rest pixels'],
-                # #                cmaps=['gray', 'rainbow', 'gray', 'gray'])
-                # --------------- ------------
-                # baseline = torch.zeros_like(images)
-                # ig = IntegratedGradients(model)
-                # titles_2 = (str(labels[0].item()), str(predict[0].item()), 'attributions')
-                # # attributions 表明每一个贡献点对最终决策的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
-                # attributions, delta = ig.attribute(images, baseline, target=labels[0].item(),
-                #                                    return_convergence_delta=True)
-                # attributions = torch.abs(attributions)
-                # attributions = (attributions - torch.min(attributions)) / (
-                #         torch.max(attributions) - torch.min(attributions))
-                # show_images(torch.cat([images, images_under_attack, attributions], dim=0), titles_2)
-                # print('IG Attributions:', attributions)
-                # print('Convergence Delta:', delta)
+            # ------ IntegratedGradient ------
+            # select_major_contribution_pixels(model, images, labels, pixel_k=1)
+            # #     attributions_abs_img = (attributions_abs - attributions_abs.min()) / (
+            # #             attributions_abs.max() - attributions_abs.min())
+            # # images_show = torch.cat([images, attributions_abs_img, AKP.reshape(shape), RP.reshape(shape)], dim=0)
+            # # show_two_image(images_show,
+            # #                titles=['origin', 'attribution heatmap', 'major contribution pixels', 'the rest pixels'],
+            # #                cmaps=['gray', 'rainbow', 'gray', 'gray'])
+            # --------------- ------------
+            # baseline = torch.zeros_like(images)
+            # ig = IntegratedGradients(model)
+            # titles_2 = (str(labels[0].item()), str(predict[0].item()), 'attributions')
+            # # attributions 表明每一个贡献点对最终决策的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
+            # attributions, delta = ig.attribute(images, baseline, target=labels[0].item(),
+            #                                    return_convergence_delta=True)
+            # attributions = torch.abs(attributions)
+            # attributions = (attributions - torch.min(attributions)) / (
+            #         torch.max(attributions) - torch.min(attributions))
+            # show_images(torch.cat([images, images_under_attack, attributions], dim=0), titles_2)
+            # print('IG Attributions:', attributions)
+            # print('Convergence Delta:', delta)
 
-                # break
+            # break
 
         if acc_num_before_attack > N:
             break
