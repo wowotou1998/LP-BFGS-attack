@@ -8,7 +8,7 @@ from captum.attr import (
     NeuronConductance,
     NoiseTunnel,
 )
-from attack_models import show_images
+
 
 def tanh_space(x):
     return 1 / 2 * (torch.tanh(x) + 1)
@@ -39,7 +39,7 @@ def major_contribution_pixels_idx(model, images, labels, pixel_k):
     baseline = torch.zeros_like(images)
     ig = IntegratedGradients(model)
     # attributions 表明每一个贡献点对最终决策（正确的标签）的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
-    attributions, delta = ig.attribute(images, baseline,
+    attributions, delta = ig.attribute(images.detach().clone(), baseline,
                                        target=labels[0].item(),
                                        return_convergence_delta=True)
 
@@ -88,15 +88,39 @@ def select_major_contribution_pixels(model, images, labels, pixel_k):
     A_KP = A.mm(KP)
     RP = images.detach().clone().flatten().view(-1, 1) - A_KP
 
-    # --------
-    shape = images.shape
-    attributions_abs_img = (attributions_abs - attributions_abs.min()) / (
-                attributions_abs.max() - attributions_abs.min())
-    images_show = torch.cat([images, attributions_abs_img, A_KP.reshape(shape), RP.reshape(shape)], dim=0)
-    show_images(images_show,
-                   titles=['origin', 'attribution heatmap', 'important k pixels', 'the rest pixels'],
-                   )
-    # --------
+    # -------- plot --------
+    # import matplotlib.pyplot as plt
+    # shape = images.shape
+    # attr_min, attr_max = attributions_abs.min().item(), attributions_abs.max().item()
+    # attributions_abs_img = (attributions_abs - attr_min) / (
+    #         attr_max - attr_min)
+    #
+    # fig, axes = plt.subplots(1, 4, figsize=(2 * 4, 2))
+    # for i in range(4):
+    #     axes[i].set_xticks([])
+    #     axes[i].set_yticks([])
+    #
+    # image = images[0].cpu().detach().numpy().transpose(1, 2, 0)
+    # axes[0].imshow(image, cmap='gray')
+    # axes[0].set_title('origin')
+    #
+    # image = attributions_abs_img[0].cpu().detach().numpy().transpose(1, 2, 0)
+    # axes[1].imshow(image, cmap='coolwarm')
+    # axes[1].set_title('attribution heatmap')
+    # # add color bar
+    # s_cmap_std = plt.cm.ScalarMappable(cmap='coolwarm', norm=plt.Normalize(vmin=attr_min, vmax=attr_max))
+    # fig.colorbar(s_cmap_std, ax=axes[1], ticks=[attr_min, 0.5 * (attr_max - attr_min), attr_max])
+    #
+    # image = A_KP.reshape(shape)[0].cpu().detach().numpy().transpose(1, 2, 0)
+    # axes[2].imshow(image, cmap='gray')
+    # axes[2].set_title('important k pixels')
+    #
+    # image = RP.reshape(shape)[0].cpu().detach().numpy().transpose(1, 2, 0)
+    # axes[2].imshow(image, cmap='gray')
+    # axes[2].set_title('the rest pixels')
+    # plt.show()
+    # fig.savefig('pixel_selecor.pdf')
+    # -------- plot --------
 
     # A is a matrix, size is n*k
     # KP is a matrix, size is k*1

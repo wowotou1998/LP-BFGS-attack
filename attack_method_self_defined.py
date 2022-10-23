@@ -314,7 +314,7 @@ class Limited_CW2(Attack):
             tlab = F.one_hot(pre_label, num_classes=10)
 
         # c的初始化边界
-        upper_bound = 1e5
+        upper_bound = self.c
         lower_bound = 0
         c = self.c
         o_c = -1
@@ -353,6 +353,7 @@ class Limited_CW2(Attack):
                     # loss1 = other - real + k
                 else:
                     # 无目标攻击的置信度损失函数，让正确类别的信息分数下降，让其他类别的信息分数上涨
+                    # 其实原本的loss函数应该是 求最大值, 但是pytorch 默认优化最小值, 因此我们应当把损失函数写成求最小值的形式
                     loss1 = -other + real + self.kappa
                     # loss1=other-real+k
                 loss1 = torch.clamp(loss1, min=0)
@@ -435,7 +436,7 @@ class Limited_CW2(Attack):
                         c = (lower_bound + upper_bound) / 2
                     else:
                         c *= 10
-                        c = max(1e5, c)
+                        c = max(self.c, c)
 
             # print("outer_step={} c {}->{}".format(outer_step,o_c,c))
             # logging.info("outer_step={} c {}->{}".format(outer_step, o_c, c))
@@ -451,7 +452,7 @@ class Limited_CW2(Attack):
         #     if adversary.try_accept_the_example(o_bestattack, o_bestscore):
         #         return adversary
         # adv_image = reconstruct_image(self.inf2box(w.detach()))
-        o_bestattack
+        # o_bestattack
         return o_bestattack
 
     def inf2box(self, x):

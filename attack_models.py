@@ -12,10 +12,10 @@ import matplotlib.pyplot as plt
 from pytorchcv.model_provider import get_model as ptcv_get_model
 import torch.nn.functional as F
 from minimize import minimize
-from pixel_selector import (inverse_tanh_space, tanh_space,
-                            inf2box, box2inf,
+from pixel_selector import (inf2box, box2inf,
                             select_major_contribution_pixels, major_contribution_pixels_idx)
 from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_PGDL2, Limited_CW, Limited_CW2
+from prefetch_generator import BackgroundGenerator
 # prepare your pytorch model as "model"
 # prepare a batch of data and label as "cln_data" and "true_label"
 # ...
@@ -62,8 +62,8 @@ def show_images(images, titles, ):
         axes[i].set_xticks([])
         axes[i].set_yticks([])
         axes[i].set_title(titles[i])
-    plt.show()
-    fig.savefig('pixel_selecor.pdf')
+    plt.show(block=True)
+    # fig.savefig('pixel_selecor.pdf')
 
 
 # def generate_attack_method(attack_name, model, epsilon, Iterations, Momentum):
@@ -125,7 +125,12 @@ def load_model_args(model_name):
     return model, check_point['test_acc']
 
 
-def load_dataset(dataset, batch_size, is_shuffle=False):
+def load_dataset(dataset, batch_size, is_shuffle=False, pin=True):
+    class DataLoaderX(DataLoader):
+
+        def __iter__(self):
+            return BackgroundGenerator(super().__iter__())
+
     data_tf = transforms.Compose(
         [
             transforms.ToTensor(),
@@ -141,29 +146,30 @@ def load_dataset(dataset, batch_size, is_shuffle=False):
 
         ]
     )
-
+    test_dataset = None
     if dataset == 'MNIST':
         test_dataset = datasets.MNIST(root='./DataSet/MNIST', train=False, transform=data_tf, download=True)
-        test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
         test_dataset_size = 10000
     elif dataset == 'ImageNet':
         test_dataset = datasets.ImageNet(root='../DataSet/ImageNet', split='val', transform=data_tf_imagenet)
-        test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
+
         test_dataset_size = 50000
     elif dataset == 'CIFAR10':
         test_dataset = datasets.CIFAR10(root='./DataSet/CIFAR10', train=False, transform=data_tf, download=True)
-        test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
+
         test_dataset_size = 10000
     elif dataset == 'SVHN':
         test_dataset = datasets.SVHN(root='./DataSet/SVHN', split='test', transform=data_tf, download=True)
-        test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
+
         test_dataset_size = 10000
     else:
-        test_loader, test_dataset_size = None, 0
+        raise RuntimeError('Unknown dataset')
+    test_loader = DataLoaderX(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
+
     return test_loader, test_dataset_size
 
 
-def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, pixel_k):
+def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pixel_k):
     if attack_name == 'limited_FGSM':
         start = time.perf_counter()
         atk = Limited_FGSM(model, eps=eps, pixel_k=pixel_k)
@@ -187,13 +193,12 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, pix
 
     if attack_name == 'limited_CW':
         start = time.perf_counter()
-        atk = Limited_CW2(model, c=1e5, pixel_k=pixel_k)
+        atk = Limited_CW2(model, c=trade_off_c, pixel_k=pixel_k)
         # atk = torchattacks.CW(model, c=1)
         adv_images = atk(images, labels)
         end = time.perf_counter()
         return adv_images, end - start
-
-    if attack_name == 'limited_BFGS':
+    if 'BFGS' in attack_name:
         start = time.perf_counter()
         x0 = images.detach().clone()[0:1]
         labels = labels[0:1]
@@ -210,7 +215,7 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, pix
 
         def cw_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
             kappa = 0
-            c = 1e5
+            c = trade_off_c
             KP_box = inf2box(B_inf)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -228,7 +233,7 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, pix
 
         def cw_log_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
             kappa = 0
-            c = 1e5
+            c = trade_off_c
             KP_box = inf2box(B_inf)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -246,8 +251,8 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, pix
             cost = L2_loss + c * out1
             return cost
 
-        def pure_lbfgs_attack_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
-            c = 1e5
+        def ce_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            c = trade_off_c
             KP_box = inf2box(B_inf)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -257,30 +262,50 @@ def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, pix
 
             outputs = model(adv_images)
 
-            cost = L2_loss + c * CELoss(outputs, labels)
-            return -cost
+            cost = L2_loss - c * CELoss(outputs, labels)
+            return cost
 
-        # res1 = minimize(cw_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
-        res1 = minimize(pure_lbfgs_attack_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
-        # res1 = minimize(cw_log_loss, w.detach().clone(), method='newton-exact',
-        #                 # options={'handle_npd': 'cauchy'},
-        #                 max_iter=10, tol=1e-5,
-        #                 disp=False)
-        # print('res1', res1)
+        if attack_name == 'limited_BFGS_CW':
+            res1 = minimize(cw_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
+            # res1 = minimize(ce_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
+            # res1 = minimize(cw_log_loss, w.detach().clone(), method='newton-exact',
+            #                 # options={'handle_npd': 'cauchy'},
+            #                 max_iter=10, tol=1e-5,
+            #                 disp=False)
+            # print('res1', res1)
 
-        KP_box = inf2box(res1.x)
-        adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
+            KP_box = inf2box(res1.x)
+            adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
+            adv_images = torch.clamp(adv_images, min=0, max=1)
 
-        # adversary = LBFGSAttack(predict=model, initial_const=100000, num_classes=10)
-        # adv_image = adversary.perturb(images.detach().clone(), y=labels.detach().clone())
-        # print(torch.sum((adv_image == images)))
-        end = time.perf_counter()
-        return adv_images, end - start
+            # adversary = LBFGSAttack(predict=model, initial_const=100000, num_classes=10)
+            # adv_image = adversary.perturb(images.detach().clone(), y=labels.detach().clone())
+            # print(torch.sum((adv_image == images)))
+            end = time.perf_counter()
+            return adv_images, end - start
+        elif attack_name == 'limited_BFGS_CW_LOG':
+            res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
+            KP_box = inf2box(res1.x)
+            adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
+            adv_images = torch.clamp(adv_images, min=0, max=1)
+            end = time.perf_counter()
+            return adv_images, end - start
+        elif attack_name == 'limited_BFGS_CE':
+            res1 = minimize(ce_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
+            KP_box = inf2box(res1.x)
+            adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
+            adv_images = torch.clamp(adv_images, min=0, max=1)
+            end = time.perf_counter()
+            return adv_images, end - start
+        else:
+            raise RuntimeError('unknown BFGS attack')
 
     raise RuntimeError('Unknown attack method')
 
 
-def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N, eps, pixel_k):
+def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N, eps, trade_off_c, pixel_k):
+    cifar_label = {0: "airplane", 1: "car", 2: "bird", 3: "cat", 4: "deer",
+                   5: "dog", 6: "frog", 7: "horse", 8: "ship", 9: "truck"}
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
     sample_num = 0.
     epoch_num = 0
@@ -330,7 +355,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
         # ------------------------------
 
         if min(images.shape) == 0:
-            print('\nNo images correctly classified in this batch')
+            # print('\nNo images correctly classified in this batch')
             # 为了保证不越界，全部分类不正确时要及时退出，避免下面的计算
             continue
 
@@ -339,16 +364,18 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
         acc_num_before_attack += predict_answer.sum().item()
         # 统计神经网络分类正确的样本的个数总和
         # valid_attack_num += labels.shape[0]
-
+        plot_images = images.detach().clone()
+        plot_titles = ['original: ' + str(labels[0].item())]
         for idx, attack_i in enumerate(attack_method_set):
-            images_under_attack, time_i = generate_adv_images_by_k_pixels(attack_i, model, images, labels, eps, pixel_k)
+            images_under_attack, time_i = generate_adv_images_by_k_pixels(attack_i, model, images, labels, eps,
+                                                                          trade_off_c, pixel_k)
             b = images_under_attack.shape[0]
             time_i = torch.as_tensor([time_i] * b, device=device).view(b, -1)
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
             noise = images_under_attack.detach().clone().view(images.shape[0], -1) - \
                     images.detach().clone().view(images.shape[0], -1)
             noise = torch.index_select(noise, 1, pixel_idx)
-            noise_norm1 = torch.linalg.norm(noise, ord=2, dim=1)
+            noise_norm1 = torch.linalg.norm(noise, ord=1, dim=1)
             noise_norm2 = torch.linalg.norm(noise, ord=2, dim=1)
             noise_norm_inf = torch.linalg.norm(noise, ord=float('inf'), dim=1)
 
@@ -360,7 +387,6 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
             # misclassification = ()
             # print('predict_answer', predict_answer)
             # 我们要确保 predict correct 是一个一维向量,因此使用 flatten
-            selector = labels != predict
             attack_success_index = torch.flatten(torch.nonzero(labels != predict))
             # print('predict_correct_index', predict_correct_index)
             valid_time = torch.index_select(time_i, 0, attack_success_index)
@@ -375,37 +401,72 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
             noise_norm2_total[idx] += valid_noise_norm2.sum().item()
             noise_norm_inf_total[idx] += valid_noise_norm_inf.sum().item()
 
-            # if epoch_num == 1:
-            #     print('predict_correct_element_num: ', predict_correct_index.nelement())
-            # titles_1 = (str(labels[0].item()), str(predict[0].item()))
-            # show_one_image(images, 'image_after_' + attack_i)
-            # show_images(torch.cat([images, images_under_attack], dim=0), titles_1)
+            # plot_images = torch.cat([plot_images, images_under_attack.clone().detach()], dim=0)
+            # plot_titles += [attack_i + ': ' + str(predict[0].item())]
+            if acc_num_before_attack == 1:
+                pass
 
-            # ------ IntegratedGradient ------
-            # select_major_contribution_pixels(model, images, labels, pixel_k=1)
-            # #     attributions_abs_img = (attributions_abs - attributions_abs.min()) / (
-            # #             attributions_abs.max() - attributions_abs.min())
-            # # images_show = torch.cat([images, attributions_abs_img, AKP.reshape(shape), RP.reshape(shape)], dim=0)
-            # # show_two_image(images_show,
-            # #                titles=['origin', 'attribution heatmap', 'major contribution pixels', 'the rest pixels'],
-            # #                cmaps=['gray', 'rainbow', 'gray', 'gray'])
-            # --------------- ------------
-            # baseline = torch.zeros_like(images)
-            # ig = IntegratedGradients(model)
-            # titles_2 = (str(labels[0].item()), str(predict[0].item()), 'attributions')
-            # # attributions 表明每一个贡献点对最终决策的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
-            # attributions, delta = ig.attribute(images, baseline, target=labels[0].item(),
-            #                                    return_convergence_delta=True)
-            # attributions = torch.abs(attributions)
-            # attributions = (attributions - torch.min(attributions)) / (
-            #         torch.max(attributions) - torch.min(attributions))
-            # show_images(torch.cat([images, images_under_attack, attributions], dim=0), titles_2)
-            # print('IG Attributions:', attributions)
-            # print('Convergence Delta:', delta)
+                # -------- plot attribution score--------
+                # shape = images.shape
+                # A = torch.zeros(size=(images.numel(), pixel_k), device=images.device, dtype=torch.float)
+                # # KP = torch.zeros(k, device=images.device, dtype=torch.float)
+                # # 找到矩阵A, 满足 image = A*KP+RP, A:n*k; KP:k*1; C:n*1
+                # idx, attributions_abs = major_contribution_pixels_idx(model, images, labels, pixel_k)
+                # attr_min, attr_max = attributions_abs.min().item(), attributions_abs.max().item()
+                # attributions_abs_img = (attributions_abs - attr_min) / \
+                #                        (attr_max - attr_min)
+                #
+                # KP = images.detach().clone().flatten()[idx].view(-1, 1)
+                #
+                # for i in range(pixel_k):
+                #     # 第 idx[i] 行第 i列 的元素置为 1
+                #     # idx保存了对最终决策有重要作用的像素点的下标，
+                #     A[idx[i].item()][i] = 1
+                # A_KP = A.mm(KP)
+                # RP = images.detach().clone().flatten().view(-1, 1) - A_KP
+                #
+                # fig, axes = plt.subplots(1, 6, figsize=(2 * 6, 2))
+                # for i in range(6):
+                #     axes[i].set_xticks([])
+                #     axes[i].set_yticks([])
+                #
+                # image = images[0].cpu().detach().numpy().transpose(1, 2, 0)
+                # axes[0].imshow(image, cmap='gray')
+                # axes[0].set_title('origin')
+                #
+                # image = attributions_abs_img[0].cpu().detach().numpy().transpose(1, 2, 0)
+                # axes[1].imshow(image, cmap='coolwarm')
+                # axes[1].set_title('attribution heatmap')
+                # # add color bar
+                # s_cmap_std = plt.cm.ScalarMappable(cmap='coolwarm', norm=plt.Normalize(vmin=attr_min, vmax=attr_max))
+                # fig.colorbar(s_cmap_std, ax=axes[1], ticks=[attr_min, 0.5 * (attr_max - attr_min), attr_max])
+                #
+                # A_KP_img_0 = A_KP.reshape(shape)[0].cpu().detach().numpy().transpose(1, 2, 0)
+                # axes[2].imshow(A_KP_img_0, cmap='gray')
+                # axes[2].set_title('important k pixels')
+                #
+                # RP_img = RP.reshape(shape)
+                # RP_img_0 = RP_img[0].cpu().detach().numpy().transpose(1, 2, 0)
+                # axes[3].imshow(RP_img_0, cmap='gray')
+                # axes[3].set_title('the rest pixels')
+                #
+                # adv_KP = images_under_attack-RP_img
+                # image = adv_KP[0].cpu().detach().numpy().transpose(1, 2, 0)
+                # axes[4].imshow(image, cmap='gray')
+                # axes[4].set_title('adv k pixels')
+                #
+                #
+                # image = images_under_attack[0].cpu().detach().numpy().transpose(1, 2, 0)
+                # axes[5].imshow(image, cmap='gray')
+                # axes[5].set_title('attacked image')
+                # plt.show(block=True)
+                # fig.savefig('pixel_selecor2.pdf')
+                # -------- plot attribution score --------
 
             # break
-
-        if acc_num_before_attack > N:
+        # if acc_num_before_attack == 1:
+        # show_images(plot_images, plot_titles)
+        if epoch_num >= N:
             break
     print(attack_success_num)
     attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
@@ -433,11 +494,11 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
     return attack_success_rate, time_ave, confidence_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
 
 
-def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_method_set, batch_size, eps_set,
+def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_method_set, batch_size, eps_set, trade_off_c,
                       pixel_k_set):
     import datetime
     # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    res_data = [['dataset', 'mode_name', 'attack_method', 'attack_num', 'eps_i', 'pixel_k',
+    res_data = [['dataset', 'mode_name', 'attack_method', 'attack_num', 'constant c', 'eps_i', 'pixel_k',
                  'attack_success', 'time', 'confidence', 'noise_norm1', 'noise_norm2', 'noise_norm_inf']]
     for set_i, dataset_i in enumerate(dataset):
         test_loader, test_dataset_size = load_dataset(dataset_i, batch_size, is_shuffle=True)
@@ -452,6 +513,7 @@ def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_method
                         attack_method_set=attack_method_set,
                         N=attack_N,
                         eps=eps_i,
+                        trade_off_c=trade_off_c,
                         pixel_k=pixel_k)
                     success_rate, time, confidence, norm1, norm2, norm_inf = success_rate_list.cpu().numpy().tolist(), \
                                                                              time_list.cpu().numpy().tolist(), \
@@ -460,8 +522,9 @@ def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_method
                                                                              noise_norm2_list.cpu().numpy().tolist(), \
                                                                              noise_norm_inf_list.cpu().numpy().tolist()
                     for i in range(len(success_rate_list)):
-                        res_data.append([dataset_i, mode_name, attack_method_set[i], attack_N, eps_i, pixel_k,
-                                         success_rate[i], time[i], confidence[i], norm1[i], norm2[i], norm_inf[i]])
+                        res_data.append(
+                            [dataset_i, mode_name, attack_method_set[i], attack_N, trade_off_c, eps_i, pixel_k,
+                             success_rate[i], time[i], confidence[i], norm1[i], norm2[i], norm_inf[i]])
     current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     with open('./Checkpoint/%s_%s.pkl' % (job_name, current_time), 'wb') as f:
         pickle.dump(res_data, f)
@@ -485,7 +548,7 @@ if __name__ == '__main__':
     # matplotlib.get_backend()
     # mpl.rcParams['font.sans-serif'] = ['Times New Roman']
     # mpl.rcParams['font.sans-serif'] = ['Arial']
-    mpl.rcParams['backend'] = 'agg'
+    # mpl.rcParams['backend'] = 'agg'
     # mpl.rcParams["font.size"] = 12
     mpl.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
     # mpl.rcParams['savefig.dpi'] = 400  # 保存图片分辨率
@@ -493,8 +556,8 @@ if __name__ == '__main__':
     plt.rcParams['xtick.direction'] = 'in'  # 将x周的刻度线方向设置向内
     plt.rcParams['ytick.direction'] = 'in'  # 将y轴的刻度方向设置向内
 
-    if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True
+    # if torch.cuda.is_available():
+    #     torch.backends.cudnn.benchmark = True
 
     # 生成随机数，以便固定后续随机数，方便复现代码
     random.seed(123)
@@ -506,32 +569,57 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(123)
 
     batch_size = 1
-    attack_N = 1000
-    # pixel_k_set = [20]
-    pixel_k_set = [5, 10, 15, 20]
-    # pixel_k_set = [20]
+    attack_N = 500
+    pixel_k_set = [20]
+    # pixel_k_set = [5, 10, 15]
+    # pixel_k_set = [10]
     attack_method_set = [
-        'limited_BFGS',
-        'limited_FGSM',
+        'limited_BFGS_CW',
+        'limited_BFGS_CE',
+        'limited_BFGS_CW_LOG',
+        # 'limited_FGSM',
         # 'limited_PGD',
-        'limited_CW',
+        # 'limited_CW',
     ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
     mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
     cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121'
     svhn_model_name_set = ['Res20_SVHN']
     # imagenet_model_name_set = ['ResNet50_ImageNet']
     # 'DenseNet161_ImageNet','ResNet50_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
-    job_name = 'mnist_cifar_1000'
+    job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
     attack_many_model(job_name,
-                      # ['MNIST', 'CIFAR10','SVHN'],
-                      ['MNIST', 'CIFAR10'],
-                      # [mnist_model_name_set, cifar10_model_name_set,svhn_model_name_set],
-                      [mnist_model_name_set, cifar10_model_name_set],
+                      # ['MNIST', 'CIFAR10', 'SVHN'],
+                      ['CIFAR10'],
+                      # [mnist_model_name_set, cifar10_model_name_set, svhn_model_name_set],
+                      [cifar10_model_name_set],
                       attack_N,
                       attack_method_set,
                       batch_size,
                       eps_set=[1.0],
-                      pixel_k_set=pixel_k_set
+                      trade_off_c=1e3,
+                      pixel_k_set=[20]
+                      )
+
+    job_name = 'cifar_%d_100acc_20pixel_1e3' % attack_N
+    attack_method_set = [
+        # 'limited_BFGS_CW',
+        'limited_BFGS_CE',
+        'limited_BFGS_CW_LOG',
+        # 'limited_FGSM',
+        # 'limited_PGD',
+        # 'limited_CW',
+    ]
+    attack_many_model(job_name,
+                      # ['MNIST', 'CIFAR10', 'SVHN'],
+                      ['CIFAR10'],
+                      # [mnist_model_name_set, cifar10_model_name_set, svhn_model_name_set],
+                      [cifar10_model_name_set],
+                      attack_N,
+                      attack_method_set,
+                      batch_size,
+                      eps_set=[1.0],
+                      trade_off_c=1e3,
+                      pixel_k_set=[30, 40, 50, 60, 70, 80, ]
                       )
 
     # attack_many_model('CIFAR10',
@@ -597,7 +685,7 @@ def generate_adv_images(attack_name, model, images, labels, options):
             cost = L2_loss + c * out1
             return cost
 
-        def pure_lbfgs_attack_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
+        def ce_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
             c = 1
             adv_images = tanh_space(w)
 
@@ -678,7 +766,7 @@ def generate_adv_images(attack_name, model, images, labels, options):
             cost = L2_loss + c * out1
             return cost
 
-        def pure_lbfgs_attack_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
+        def ce_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
             c = 1
             adv_images = tanh_space(w)
 
