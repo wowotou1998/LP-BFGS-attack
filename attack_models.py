@@ -164,7 +164,7 @@ def load_dataset(dataset, batch_size, is_shuffle=False, pin=True):
         test_dataset_size = 10000
     else:
         raise RuntimeError('Unknown dataset')
-    test_loader = DataLoaderX(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle)
+    test_loader = DataLoaderX(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle, num_workers=2)
 
     return test_loader, test_dataset_size
 
@@ -240,8 +240,8 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
             current_L2 = MSELoss(Flatten(adv_images),
                                  Flatten(init_images)).sum(dim=1)
             L2_loss = current_L2.sum()
-
-            outputs = model(adv_images)
+            outputs = F.softmax(model(adv_images), dim=1)
+            # outputs = model(adv_images)
             one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
             i, _ = torch.max((1 - one_hot_labels) * outputs,
                              dim=1)  # get the second largest logit 其实这里得到的是非正确标签中的最大概率，i
@@ -276,8 +276,6 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
 
             KP_box = inf2box(res1.x)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
-            adv_images = torch.clamp(adv_images, min=0, max=1)
-
             # adversary = LBFGSAttack(predict=model, initial_const=100000, num_classes=10)
             # adv_image = adversary.perturb(images.detach().clone(), y=labels.detach().clone())
             # print(torch.sum((adv_image == images)))
@@ -287,14 +285,12 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
             res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
             KP_box = inf2box(res1.x)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
-            adv_images = torch.clamp(adv_images, min=0, max=1)
             end = time.perf_counter()
             return adv_images, end - start
         elif attack_name == 'limited_BFGS_CE':
             res1 = minimize(ce_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
             KP_box = inf2box(res1.x)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
-            adv_images = torch.clamp(adv_images, min=0, max=1)
             end = time.perf_counter()
             return adv_images, end - start
         else:
@@ -307,6 +303,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
     cifar_label = {0: "airplane", 1: "car", 2: "bird", 3: "cat", 4: "deer",
                    5: "dog", 6: "frog", 7: "horse", 8: "ship", 9: "truck"}
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
     sample_num = 0.
     epoch_num = 0
 
@@ -368,7 +365,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
         plot_titles = ['original: ' + str(labels[0].item())]
         for idx, attack_i in enumerate(attack_method_set):
             images_under_attack, time_i = attack_by_k_pixels(attack_i, model, images, labels, eps,
-                                                                          trade_off_c, pixel_k)
+                                                             trade_off_c, pixel_k)
             b = images_under_attack.shape[0]
             time_i = torch.as_tensor([time_i] * b, device=device).view(b, -1)
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
@@ -570,45 +567,26 @@ if __name__ == '__main__':
 
     batch_size = 1
     attack_N = 500
-    pixel_k_set = [20]
+    # pixel_k_set = [20]
     # pixel_k_set = [5, 10, 15]
     # pixel_k_set = [10]
     attack_method_set = [
         'limited_BFGS_CW',
         'limited_BFGS_CE',
         'limited_BFGS_CW_LOG',
-        # 'limited_FGSM',
-        # 'limited_PGD',
-        # 'limited_CW',
+        'limited_FGSM',
+        'limited_CW',
     ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
     mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
     cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121'
     svhn_model_name_set = ['Res20_SVHN']
     # imagenet_model_name_set = ['ResNet50_ImageNet']
     # 'DenseNet161_ImageNet','ResNet50_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
-    job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
-    attack_many_model(job_name,
-                      # ['MNIST', 'CIFAR10', 'SVHN'],
-                      ['CIFAR10'],
-                      # [mnist_model_name_set, cifar10_model_name_set, svhn_model_name_set],
-                      [cifar10_model_name_set],
-                      attack_N,
-                      attack_method_set,
-                      batch_size,
-                      eps_set=[1.0],
-                      trade_off_c=1e3,
-                      pixel_k_set=[20]
-                      )
+
+    # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
     job_name = 'cifar_%d_100acc_20pixel_1e3' % attack_N
-    attack_method_set = [
-        # 'limited_BFGS_CW',
-        'limited_BFGS_CE',
-        'limited_BFGS_CW_LOG',
-        # 'limited_FGSM',
-        # 'limited_PGD',
-        # 'limited_CW',
-    ]
+
     attack_many_model(job_name,
                       # ['MNIST', 'CIFAR10', 'SVHN'],
                       ['CIFAR10'],
@@ -616,10 +594,10 @@ if __name__ == '__main__':
                       [cifar10_model_name_set],
                       attack_N,
                       attack_method_set,
-                      batch_size,
+                      batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
-                      pixel_k_set=[30, 40, 50, 60, 70, 80, ]
+                      pixel_k_set=[20, 40, 60, 80, 100]
                       )
 
     # attack_many_model('CIFAR10',
