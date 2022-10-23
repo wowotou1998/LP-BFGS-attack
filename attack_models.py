@@ -169,7 +169,7 @@ def load_dataset(dataset, batch_size, is_shuffle=False, pin=True):
     return test_loader, test_dataset_size
 
 
-def generate_adv_images_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pixel_k):
+def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pixel_k):
     if attack_name == 'limited_FGSM':
         start = time.perf_counter()
         atk = Limited_FGSM(model, eps=eps, pixel_k=pixel_k)
@@ -367,7 +367,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
         plot_images = images.detach().clone()
         plot_titles = ['original: ' + str(labels[0].item())]
         for idx, attack_i in enumerate(attack_method_set):
-            images_under_attack, time_i = generate_adv_images_by_k_pixels(attack_i, model, images, labels, eps,
+            images_under_attack, time_i = attack_by_k_pixels(attack_i, model, images, labels, eps,
                                                                           trade_off_c, pixel_k)
             b = images_under_attack.shape[0]
             time_i = torch.as_tensor([time_i] * b, device=device).view(b, -1)
