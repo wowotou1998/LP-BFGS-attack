@@ -33,5 +33,5 @@ python attack_models.py
 If you find this repo useful for your research, please consider citing the paper
 
 ```
-waiting for updated
+waiting for update
 ```
