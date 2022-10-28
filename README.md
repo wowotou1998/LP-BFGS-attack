@@ -33,5 +33,12 @@ python attack_models.py
 If you find this repo useful for your research, please consider citing the paper
 
 ```
-waiting for update
+@misc{lp-bfgs-attack,
+  doi = {10.48550/arXiv.2210.15446},
+  url = {https://arxiv.org/abs/2210.15446},
+  author = {Zhang, Jiebao and Qian, Wenhua and Nie, Rencan and Cao, Jinde and Xu, Dan},
+  title = {LP-BFGS attack: An adversarial attack based on the Hessian with limited pixels},
+  publisher = {arXiv},
+  year = {2022},
+}
 ```
