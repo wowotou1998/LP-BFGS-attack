@@ -1,6 +1,7 @@
 import torch
 
 a = torch.tensor([[[1, 2]]])
+print(torch.cuda.is_available())
 print('a[...]', a[...][0][0])
 # 取行
 # print(a[[0,1],:])
