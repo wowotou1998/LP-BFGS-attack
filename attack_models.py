@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from minimize import minimize
 from pixel_selector import (inf2box, box2inf,
                             select_major_contribution_pixels, major_contribution_pixels_idx)
-from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_PGDL2, Limited_CW, Limited_CW2
+from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_PGDL2, Limited_CW, Limited_CW3, Limited_CW2
 from prefetch_generator import BackgroundGenerator
 # prepare your pytorch model as "model"
 # prepare a batch of data and label as "cln_data" and "true_label"
@@ -27,7 +27,8 @@ import torch
 import torch.nn as nn
 import time
 
-from advertorch.attacks import LBFGSAttack
+
+# from advertorch.attacks import LBFGSAttack
 
 
 def show_one_image(images, title):
@@ -104,11 +105,11 @@ def load_model_args(model_name):
         model = ptcv_get_model("vgg19", pretrained=True, root='../Checkpoint')
         # model = torchvision.models.vgg19(pretrained=True, )
         return model, 76.130
+    elif model_name == 'ResNet34_ImageNet':
+        model = ptcv_get_model("resnet34", pretrained=True, root='../Checkpoint')
+        return model, 100 - 26.94
     elif model_name == 'ResNet18_ImageNet':
         model = ptcv_get_model("resnet18", pretrained=True, root='../Checkpoint')
-        return model, 100 - 26.94
-    elif model_name == 'ResNet50_ImageNet':
-        model = ptcv_get_model("resnet50", pretrained=True, root='../Checkpoint')
         return model, 76.130
     elif model_name == 'ResNet101_ImageNet':
         model = ptcv_get_model("resnet101", pretrained=True, root='../Checkpoint')
@@ -150,17 +151,17 @@ def load_dataset(dataset, batch_size, is_shuffle=False, pin=True):
     if dataset == 'MNIST':
         test_dataset = datasets.MNIST(root='./DataSet/MNIST', train=False, transform=data_tf, download=True)
         test_dataset_size = 10000
-    elif dataset == 'ImageNet':
-        test_dataset = datasets.ImageNet(root='../DataSet/ImageNet', split='val', transform=data_tf_imagenet)
 
+    elif dataset == 'ImageNet':
+        test_dataset = datasets.ImageNet(root='./DataSet/ImageNet', split='val', transform=data_tf_imagenet)
         test_dataset_size = 50000
+
     elif dataset == 'CIFAR10':
         test_dataset = datasets.CIFAR10(root='./DataSet/CIFAR10', train=False, transform=data_tf, download=True)
-
         test_dataset_size = 10000
+
     elif dataset == 'SVHN':
         test_dataset = datasets.SVHN(root='./DataSet/SVHN', split='test', transform=data_tf, download=True)
-
         test_dataset_size = 10000
     else:
         raise RuntimeError('Unknown dataset')
@@ -193,7 +194,7 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
 
     if attack_name == 'limited_CW':
         start = time.perf_counter()
-        atk = Limited_CW2(model, c=trade_off_c, pixel_k=pixel_k)
+        atk = Limited_CW3(model, c=trade_off_c, pixel_k=pixel_k)
         # atk = torchattacks.CW(model, c=1)
         adv_images = atk(images, labels)
         end = time.perf_counter()
@@ -224,6 +225,9 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
             L2_loss = current_L2.sum()
 
             outputs = model(adv_images)
+            labels = labels.cpu()
+            # print(labels.device)
+            # print(outputs.device)
             one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
             i, _ = torch.max((1 - one_hot_labels) * outputs, dim=1)  # get the second largest logit
             j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit
@@ -233,6 +237,7 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
 
         def cw_log_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
             kappa = 0
+            labels =labels.cpu()
             c = trade_off_c
             KP_box = inf2box(B_inf)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
@@ -513,11 +518,11 @@ def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_method
                         trade_off_c=trade_off_c,
                         pixel_k=pixel_k)
                     success_rate, time, confidence, norm1, norm2, norm_inf = success_rate_list.cpu().numpy().tolist(), \
-                                                                             time_list.cpu().numpy().tolist(), \
-                                                                             confidence_list.cpu().numpy().tolist(), \
-                                                                             noise_norm1_list.cpu().numpy().tolist(), \
-                                                                             noise_norm2_list.cpu().numpy().tolist(), \
-                                                                             noise_norm_inf_list.cpu().numpy().tolist()
+                        time_list.cpu().numpy().tolist(), \
+                        confidence_list.cpu().numpy().tolist(), \
+                        noise_norm1_list.cpu().numpy().tolist(), \
+                        noise_norm2_list.cpu().numpy().tolist(), \
+                        noise_norm_inf_list.cpu().numpy().tolist()
                     for i in range(len(success_rate_list)):
                         res_data.append(
                             [dataset_i, mode_name, attack_method_set[i], attack_N, trade_off_c, eps_i, pixel_k,
@@ -538,6 +543,8 @@ if __name__ == '__main__':
     import os
 
     os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
     from pylab import mpl
     import random
 
@@ -566,7 +573,7 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(123)
 
     batch_size = 1
-    attack_N = 500
+    attack_N = 10
     # pixel_k_set = [20]
     # pixel_k_set = [5, 10, 15]
     # pixel_k_set = [10]
@@ -578,27 +585,41 @@ if __name__ == '__main__':
         'limited_CW',
     ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
     mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
-    cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121'
+    cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet34', 'ResNet101', 'DenseNet121'
     svhn_model_name_set = ['Res20_SVHN']
-    # imagenet_model_name_set = ['ResNet50_ImageNet']
-    # 'DenseNet161_ImageNet','ResNet50_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
+    imagenet_model_name_set = ['ResNet18_ImageNet']
+    # imagenet_model_name_set = ['ResNet34_ImageNet']
+    # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
 
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
-    job_name = 'cifar_%d_100acc_20pixel_1e3' % attack_N
-
+    job_name = 'imagenet_%d_100acc_20pixel_1e3' % attack_N
     attack_many_model(job_name,
-                      # ['MNIST', 'CIFAR10', 'SVHN'],
-                      ['CIFAR10'],
-                      # [mnist_model_name_set, cifar10_model_name_set, svhn_model_name_set],
-                      [cifar10_model_name_set],
+                      # ['MNIST'],
+                      ['ImageNet'],
+                      # [mnist_model_name_set,],
+                      [imagenet_model_name_set],
                       attack_N,
                       attack_method_set,
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
                       pixel_k_set=[20, 40, 60, 80, 100]
+                      # pixel_k_set=[20]
                       )
+
+    # attack_many_model(job_name,
+    #                   # ['MNIST', 'CIFAR10', 'SVHN'],
+    #                   ['CIFAR10'],
+    #                   # [mnist_model_name_set, cifar10_model_name_set, svhn_model_name_set],
+    #                   [cifar10_model_name_set],
+    #                   attack_N,
+    #                   attack_method_set,
+    #                   batch_size=1,
+    #                   eps_set=[1.0],
+    #                   trade_off_c=1e3,
+    #                   pixel_k_set=[20, 40, 60, 80, 100]
+    #                   )
 
     # attack_many_model('CIFAR10',
     #                   cifar10_model_name_set,
@@ -611,163 +632,4 @@ if __name__ == '__main__':
 
     print("ALL WORK HAVE BEEN DONE!!!")
 
-'''
-def generate_adv_images(attack_name, model, images, labels, options):
-    if attack_name == 'second-order':
-        x0 = images[0:1]
-        x0[x0 == 0.0] = 1. / 255 * 0.01
-        x0[x0 == 1.0] = 1. - 1. / 255 * 0.01
-        w = inverse_tanh_space(x0)
 
-        # def func(image, label=labels[0].detach().clone()):
-        #     logits = model(tanh_space(image))
-        #     return -logits[0][label]
-
-        CELoss = nn.CrossEntropyLoss()
-        MSELoss = nn.MSELoss(reduction='none')
-        Flatten = nn.Flatten()
-
-        def cw_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
-            kappa = 0
-            c = 1
-            adv_images = tanh_space(w)
-
-            current_L2 = MSELoss(Flatten(adv_images),
-                                 Flatten(init_images)).sum(dim=1)
-            L2_loss = current_L2.sum()
-
-            outputs = model(adv_images)
-            one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
-            i, _ = torch.max((1 - one_hot_labels) * outputs, dim=1)  # get the second largest logit
-            j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit
-            out1 = torch.clamp((j - i), min=-kappa).sum()
-            cost = L2_loss + c * out1
-            return cost
-
-        def cw_log_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
-            kappa = 0
-            c = 10000
-            adv_images = tanh_space(w)
-
-            current_L2 = MSELoss(Flatten(adv_images),
-                                 Flatten(init_images)).sum(dim=1)
-            L2_loss = current_L2.sum()
-
-            outputs = model(adv_images)
-            one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
-            i, _ = torch.max((1 - one_hot_labels) * outputs,
-                             dim=1)  # get the second largest logit 其实这里得到的是非正确标签中的最大概率，i
-            j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit, 其实这里是得到正确标签对应的概率，j
-            # 对于无目标攻击， 我们总是希望真标签对应的概率较小，而不是正确的标签的概率较大， 即 (i-j)越大越好， (j-i)越小越好
-            out1 = torch.clamp((torch.log(j) - torch.log(i)), min=-kappa).sum()
-            cost = L2_loss + c * out1
-            return cost
-
-        def ce_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
-            c = 1
-            adv_images = tanh_space(w)
-
-            current_L2 = MSELoss(Flatten(adv_images),
-                                 Flatten(init_images)).sum(dim=1)
-            L2_loss = current_L2.sum()
-
-            outputs = model(adv_images)
-
-            cost = L2_loss + c * CELoss(outputs, labels)
-            return -cost
-
-        res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=False)
-        # res1 = minimize(cw_log_loss, w.detach().clone(), method='newton-exact',
-        #                 # options={'handle_npd': 'cauchy'},
-        #                 max_iter=10, tol=1e-5,
-        #                 disp=False)
-        # adv_image = tanh_space(res1.x)
-        adversary = LBFGSAttack(predict=model, initial_const=100000, num_classes=10)
-
-        adv_image = adversary.perturb(images.detach().clone(), y=labels.detach().clone())
-        print(torch.sum((adv_image == images)))
-        return adv_image
-
-    if attack_name == 'limited-second-order':
-        x0 = images[0:1]
-        labels = labels[0:1]
-        original_shape = x0.shape
-        A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, pixel_k=1)
-
-        KP_box[KP_box == 0.0] = 1. / 255 * 0.1
-        KP_box[KP_box == 1.0] = 1. - 1. / 255 * 0.1
-        w = box2inf(KP_box)
-
-        # def func(image, label=labels[0].detach().clone()):
-        #     logits = model(tanh_space(image))
-        #     return -logits[0][label]
-
-        CELoss = nn.CrossEntropyLoss()
-        MSELoss = nn.MSELoss(reduction='none')
-        Flatten = nn.Flatten()
-
-        def cw_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
-            kappa = 0
-            c = 1
-            KP_box = inf2box(B_inf)
-            adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
-
-            current_L2 = MSELoss(Flatten(adv_images),
-                                 Flatten(init_images)).sum(dim=1)
-            L2_loss = current_L2.sum()
-
-            outputs = model(adv_images)
-            one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
-            i, _ = torch.max((1 - one_hot_labels) * outputs, dim=1)  # get the second largest logit
-            j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit
-            out1 = torch.clamp((j - i), min=-kappa).sum()
-            cost = L2_loss + c * out1
-            return cost
-
-        def cw_log_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
-            kappa = 0
-            c = 1000000
-            KP_box = inf2box(B_inf)
-            adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
-
-            current_L2 = MSELoss(Flatten(adv_images),
-                                 Flatten(init_images)).sum(dim=1)
-            L2_loss = current_L2.sum()
-
-            outputs = model(adv_images)
-            one_hot_labels = torch.eye(len(outputs[0]))[labels].to(images.device)
-            i, _ = torch.max((1 - one_hot_labels) * outputs,
-                             dim=1)  # get the second largest logit 其实这里得到的是非正确标签中的最大概率，i
-            j = torch.masked_select(outputs, one_hot_labels.bool())  # get the largest logit, 其实这里是得到正确标签对应的概率，j
-            # 对于无目标攻击， 我们总是希望真标签对应的概率较小，而不是正确的标签的概率较大， 即 (i-j)越大越好， (j-i)越小越好
-            out1 = torch.clamp((torch.log(j) - torch.log(i)), min=-kappa).sum()
-            cost = L2_loss + c * out1
-            return cost
-
-        def ce_loss(w, labels=labels.detach().clone(), init_images=images.detach().clone()):
-            c = 1
-            adv_images = tanh_space(w)
-
-            current_L2 = MSELoss(Flatten(adv_images),
-                                 Flatten(init_images)).sum(dim=1)
-            L2_loss = current_L2.sum()
-
-            outputs = model(adv_images)
-
-            cost = L2_loss + c * CELoss(outputs, labels)
-            return -cost
-
-        res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=100, tol=1e-5, disp=False)
-        # res1 = minimize(cw_log_loss, w.detach().clone(), method='newton-exact',
-        #                 # options={'handle_npd': 'cauchy'},
-        #                 max_iter=10, tol=1e-5,
-        #                 disp=False)
-
-        KP_box = inf2box(res1.x)
-        adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
-
-        # adversary = LBFGSAttack(predict=model, initial_const=100000, num_classes=10)
-        # adv_image = adversary.perturb(images.detach().clone(), y=labels.detach().clone())
-        # print(torch.sum((adv_image == images)))
-        return adv_images
-'''
