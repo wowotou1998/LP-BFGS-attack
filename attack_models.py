@@ -194,7 +194,7 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
 
     if attack_name == 'limited_CW':
         start = time.perf_counter()
-        atk = Limited_CW3(model, c=trade_off_c, pixel_k=pixel_k)
+        atk = Limited_CW3(model, c=trade_off_c, steps=200, pixel_k=pixel_k)
         # atk = torchattacks.CW(model, c=1)
         adv_images = atk(images, labels)
         end = time.perf_counter()
@@ -206,8 +206,8 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
         original_shape = x0.shape
         A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, pixel_k)
 
-        KP_box[KP_box == 0.0] = 1e-4
-        KP_box[KP_box == 1.0] = 1 - 1e-4
+        KP_box[KP_box == 0.0] = 0.1 / 255.
+        KP_box[KP_box == 1.0] = 1 - 0.1 / 255.
         w = box2inf(KP_box)
 
         CELoss = nn.CrossEntropyLoss()
@@ -237,7 +237,7 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
 
         def cw_log_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
             kappa = 0
-            labels =labels.cpu()
+            labels = labels.cpu()
             c = trade_off_c
             KP_box = inf2box(B_inf)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
@@ -321,6 +321,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
     noise_norm1_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
     noise_norm2_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
     noise_norm_inf_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    ZEROS = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
 
     # every epoch has 64 images ,every images has 1 channel and the channel size is 28*28
     pbar = tqdm(total=test_loader_size)
@@ -470,14 +471,15 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
         # show_images(plot_images, plot_titles)
         if epoch_num >= N:
             break
-    print(attack_success_num)
+    print('attack_success_num', attack_success_num)
+    print('confidence_total', confidence_total)
     attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
     # attack_success_num[attack_success_num == 0] = float('inf'), 防止出现除 0 溢出 inf
-    time_ave = (time_total / attack_success_num)
-    confidence_ave = (confidence_total / attack_success_num)
-    noise_norm1_ave = (noise_norm1_total / attack_success_num)
-    noise_norm2_ave = (noise_norm2_total / attack_success_num)
-    noise_norm_inf_ave = (noise_norm_inf_total / attack_success_num)
+    time_ave = ZEROS if 0. == attack_success_num else (time_total / attack_success_num)
+    confidence_ave = ZEROS if 0. == attack_success_num else (confidence_total / attack_success_num)
+    noise_norm1_ave = ZEROS if 0. == attack_success_num else (noise_norm1_total / attack_success_num)
+    noise_norm2_ave = ZEROS if 0. == attack_success_num else (noise_norm2_total / attack_success_num)
+    noise_norm_inf_ave = ZEROS if 0. == attack_success_num else (noise_norm_inf_total / attack_success_num)
 
     for i in range(len(attack_method_set)):
         print(
@@ -587,8 +589,8 @@ if __name__ == '__main__':
     mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
     cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet34', 'ResNet101', 'DenseNet121'
     svhn_model_name_set = ['Res20_SVHN']
-    imagenet_model_name_set = ['ResNet18_ImageNet']
-    # imagenet_model_name_set = ['ResNet34_ImageNet']
+    # imagenet_model_name_set = ['ResNet18_ImageNet']
+    imagenet_model_name_set = ['ResNet34_ImageNet']
     # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
 
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
@@ -631,5 +633,3 @@ if __name__ == '__main__':
     #                   )
 
     print("ALL WORK HAVE BEEN DONE!!!")
-
-
