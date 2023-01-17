@@ -321,7 +321,12 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
     noise_norm1_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
     noise_norm2_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
     noise_norm_inf_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
-    ZEROS = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+
+    time_ave = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    confidence_ave = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    noise_norm1_ave = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    noise_norm2_ave = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    noise_norm_inf_ave = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
 
     # every epoch has 64 images ,every images has 1 channel and the channel size is 28*28
     pbar = tqdm(total=test_loader_size)
@@ -472,15 +477,17 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
         if epoch_num >= N:
             break
     print('attack_success_num', attack_success_num)
-    print('confidence_total', confidence_total)
+    # print('confidence_total', confidence_total)
     attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
     # attack_success_num[attack_success_num == 0] = float('inf'), 防止出现除 0 溢出 inf
-    time_ave = ZEROS if 0. == attack_success_num else (time_total / attack_success_num)
-    confidence_ave = ZEROS if 0. == attack_success_num else (confidence_total / attack_success_num)
-    noise_norm1_ave = ZEROS if 0. == attack_success_num else (noise_norm1_total / attack_success_num)
-    noise_norm2_ave = ZEROS if 0. == attack_success_num else (noise_norm2_total / attack_success_num)
-    noise_norm_inf_ave = ZEROS if 0. == attack_success_num else (noise_norm_inf_total / attack_success_num)
-
+    no_zero_index = attack_success_num != 0
+    time_ave[no_zero_index] = (time_total[no_zero_index] / attack_success_num[no_zero_index])
+    confidence_ave[no_zero_index] = (confidence_total[no_zero_index] / attack_success_num[no_zero_index])
+    noise_norm1_ave[no_zero_index] = (noise_norm1_total[no_zero_index] / attack_success_num[no_zero_index])
+    noise_norm2_ave[no_zero_index] = (noise_norm2_total[no_zero_index] / attack_success_num[no_zero_index])
+    noise_norm_inf_ave[no_zero_index] = (noise_norm_inf_total[no_zero_index] / attack_success_num[no_zero_index])
+    pbar.close()
+    print('model acc %.2f' % (acc_num_before_attack / sample_num))
     for i in range(len(attack_method_set)):
         print(
             'eps=%.2f, pixel_k=%d, %s ASR=%.2f%%,time=%.2f(\mu s) confidence=%.2f, norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
@@ -492,9 +499,6 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
                 noise_norm1_ave[i],
                 noise_norm2_ave[i],
                 noise_norm_inf_ave[i]))
-
-    pbar.close()
-    print('model acc %.2f' % (acc_num_before_attack / sample_num))
     return attack_success_rate, time_ave, confidence_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
 
 
@@ -575,7 +579,7 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(123)
 
     batch_size = 1
-    attack_N = 10
+    attack_N = 100
     # pixel_k_set = [20]
     # pixel_k_set = [5, 10, 15]
     # pixel_k_set = [10]
@@ -606,7 +610,9 @@ if __name__ == '__main__':
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
-                      pixel_k_set=[20, 40, 60, 80, 100]
+                      pixel_k_set=[20,
+                                   # 40, 60, 80, 100
+                                   ]
                       # pixel_k_set=[20]
                       )
 
