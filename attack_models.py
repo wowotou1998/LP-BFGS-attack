@@ -15,6 +15,7 @@ from minimize import minimize
 from pixel_selector import (inf2box, box2inf,
                             select_major_contribution_pixels, major_contribution_pixels_idx)
 from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_PGDL2, Limited_CW, Limited_CW3, Limited_CW2
+from torchattacks import SparseFool
 from prefetch_generator import BackgroundGenerator
 # prepare your pytorch model as "model"
 # prepare a batch of data and label as "cln_data" and "true_label"
@@ -184,7 +185,12 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
         adv_images = atk(images, labels)
         end = time.perf_counter()
         return adv_images, end - start
-
+    if attack_name == 'SparseFool':
+        start = time.perf_counter()
+        atk = SparseFool(model, steps=200, lam=pixel_k * (4. / 100.))
+        adv_images = atk(images, labels)
+        end = time.perf_counter()
+        return adv_images, end - start
     # if attack_name == 'limited_PGDL2':
     #     start = time.perf_counter()
     #     atk = Limited_PGDL2(model, eps=eps, alpha=0.27, steps=20, pixel_k=pixel_k)
@@ -304,7 +310,7 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
     raise RuntimeError('Unknown attack method')
 
 
-def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N, eps, trade_off_c, pixel_k):
+def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, trade_off_c, pixel_k):
     cifar_label = {0: "airplane", 1: "car", 2: "bird", 3: "cat", 4: "deer",
                    5: "dog", 6: "frog", 7: "horse", 8: "ship", 9: "truck"}
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
@@ -314,19 +320,21 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
 
     acc_num_before_attack = 0.
 
-    attack_success_num = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    attack_success_num = torch.zeros(len(attack_set), dtype=torch.float, device=device)
 
-    time_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
-    confidence_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
-    noise_norm1_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
-    noise_norm2_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
-    noise_norm_inf_total = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    time_total = torch.zeros(len(attack_set), dtype=torch.float, device=device)
+    confidence_total = torch.zeros(len(attack_set), dtype=torch.float, device=device)
+    noise_norm0_total = torch.zeros(len(attack_set), dtype=torch.float, device=device)
+    noise_norm1_total = torch.zeros(len(attack_set), dtype=torch.float, device=device)
+    noise_norm2_total = torch.zeros(len(attack_set), dtype=torch.float, device=device)
+    noise_norm_inf_total = torch.zeros(len(attack_set), dtype=torch.float, device=device)
 
-    time_ave = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
-    confidence_ave = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
-    noise_norm1_ave = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
-    noise_norm2_ave = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
-    noise_norm_inf_ave = torch.zeros(len(attack_method_set), dtype=torch.float, device=device)
+    time_ave = torch.zeros(len(attack_set), dtype=torch.float, device=device)
+    confidence_ave = torch.zeros(len(attack_set), dtype=torch.float, device=device)
+    noise_norm0_ave = torch.zeros(len(attack_set), dtype=torch.float, device=device)
+    noise_norm1_ave = torch.zeros(len(attack_set), dtype=torch.float, device=device)
+    noise_norm2_ave = torch.zeros(len(attack_set), dtype=torch.float, device=device)
+    noise_norm_inf_ave = torch.zeros(len(attack_set), dtype=torch.float, device=device)
 
     # every epoch has 64 images ,every images has 1 channel and the channel size is 28*28
     pbar = tqdm(total=test_loader_size)
@@ -374,7 +382,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
         # valid_attack_num += labels.shape[0]
         plot_images = images.detach().clone()
         plot_titles = ['original: ' + str(labels[0].item())]
-        for idx, attack_i in enumerate(attack_method_set):
+        for idx, attack_i in enumerate(attack_set):
             images_under_attack, time_i = attack_by_k_pixels(attack_i, model, images, labels, eps,
                                                              trade_off_c, pixel_k)
             b = images_under_attack.shape[0]
@@ -383,6 +391,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
             noise = images_under_attack.detach().clone().view(images.shape[0], -1) - \
                     images.detach().clone().view(images.shape[0], -1)
             noise = torch.index_select(noise, 1, pixel_idx)
+            noise_norm0 = torch.linalg.norm(noise, ord=0, dim=1)
             noise_norm1 = torch.linalg.norm(noise, ord=1, dim=1)
             noise_norm2 = torch.linalg.norm(noise, ord=2, dim=1)
             noise_norm_inf = torch.linalg.norm(noise, ord=float('inf'), dim=1)
@@ -399,12 +408,14 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
             # print('predict_correct_index', predict_correct_index)
             valid_time = torch.index_select(time_i, 0, attack_success_index)
             valid_confidence = torch.index_select(confidence, 0, attack_success_index)
+            valid_noise_norm0 = torch.index_select(noise_norm0, 0, attack_success_index)
             valid_noise_norm1 = torch.index_select(noise_norm1, 0, attack_success_index)
             valid_noise_norm2 = torch.index_select(noise_norm2, 0, attack_success_index)
             valid_noise_norm_inf = torch.index_select(noise_norm_inf, 0, attack_success_index)
 
             time_total[idx] = valid_time.sum().item()
             confidence_total[idx] += valid_confidence.sum().item()
+            noise_norm0_total[idx] += valid_noise_norm0.sum().item()
             noise_norm1_total[idx] += valid_noise_norm1.sum().item()
             noise_norm2_total[idx] += valid_noise_norm2.sum().item()
             noise_norm_inf_total[idx] += valid_noise_norm_inf.sum().item()
@@ -483,56 +494,60 @@ def attack_one_model(model, test_loader, test_loader_size, attack_method_set, N,
     no_zero_index = attack_success_num != 0
     time_ave[no_zero_index] = (time_total[no_zero_index] / attack_success_num[no_zero_index])
     confidence_ave[no_zero_index] = (confidence_total[no_zero_index] / attack_success_num[no_zero_index])
+    noise_norm0_ave[no_zero_index] = (noise_norm0_total[no_zero_index] / attack_success_num[no_zero_index])
     noise_norm1_ave[no_zero_index] = (noise_norm1_total[no_zero_index] / attack_success_num[no_zero_index])
     noise_norm2_ave[no_zero_index] = (noise_norm2_total[no_zero_index] / attack_success_num[no_zero_index])
     noise_norm_inf_ave[no_zero_index] = (noise_norm_inf_total[no_zero_index] / attack_success_num[no_zero_index])
     pbar.close()
     print('model acc %.2f' % (acc_num_before_attack / sample_num))
-    for i in range(len(attack_method_set)):
+    for i in range(len(attack_set)):
         print(
-            'eps=%.2f, pixel_k=%d, %s ASR=%.2f%%,time=%.2f(\mu s) confidence=%.2f, norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
+            'eps=%.2f, pixel_k=%d, %s ASR=%.2f%%,time=%.2f(\mu s) confidence=%.2f, norm(0)=%.2f,norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
                 eps, pixel_k,
-                attack_method_set[i],
+                attack_set[i],
                 attack_success_rate[i],
                 time_ave[i],
                 confidence_ave[i],
+                noise_norm0_ave[i],
                 noise_norm1_ave[i],
                 noise_norm2_ave[i],
                 noise_norm_inf_ave[i]))
-    return attack_success_rate, time_ave, confidence_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
+    return attack_success_rate, time_ave, confidence_ave, noise_norm0_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
 
 
-def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_method_set, batch_size, eps_set, trade_off_c,
+def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_set, batch_size, eps_set, trade_off_c,
                       pixel_k_set):
     import datetime
     # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     res_data = [['dataset', 'mode_name', 'attack_method', 'attack_num', 'constant c', 'eps_i', 'pixel_k',
-                 'attack_success', 'time', 'confidence', 'noise_norm1', 'noise_norm2', 'noise_norm_inf']]
+                 'attack_success', 'time(s)', 'confidence', 'noise_norm0', 'noise_norm1', 'noise_norm2', 'noise_norm_inf']]
     for set_i, dataset_i in enumerate(dataset):
         test_loader, test_dataset_size = load_dataset(dataset_i, batch_size, is_shuffle=True)
         for mode_name in model_name_set[set_i]:
             model, model_acc = load_model_args(mode_name)
             for eps_i in eps_set:
                 for pixel_k in pixel_k_set:
-                    success_rate_list, time_list, confidence_list, noise_norm1_list, noise_norm2_list, noise_norm_inf_list = attack_one_model(
+                    success_rate_list, time_list, confidence_list, noise_norm0_list, noise_norm1_list, noise_norm2_list, noise_norm_inf_list \
+                        = attack_one_model(
                         model=model,
                         test_loader=test_loader,
                         test_loader_size=test_dataset_size,
-                        attack_method_set=attack_method_set,
+                        attack_set=attack_set,
                         N=attack_N,
                         eps=eps_i,
                         trade_off_c=trade_off_c,
                         pixel_k=pixel_k)
-                    success_rate, time, confidence, norm1, norm2, norm_inf = success_rate_list.cpu().numpy().tolist(), \
+                    success_rate, time, confidence, norm0, norm1, norm2, norm_inf = success_rate_list.cpu().numpy().tolist(), \
                         time_list.cpu().numpy().tolist(), \
                         confidence_list.cpu().numpy().tolist(), \
+                        noise_norm0_list.cpu().numpy().tolist(), \
                         noise_norm1_list.cpu().numpy().tolist(), \
                         noise_norm2_list.cpu().numpy().tolist(), \
                         noise_norm_inf_list.cpu().numpy().tolist()
                     for i in range(len(success_rate_list)):
                         res_data.append(
-                            [dataset_i, mode_name, attack_method_set[i], attack_N, trade_off_c, eps_i, pixel_k,
-                             success_rate[i], time[i], confidence[i], norm1[i], norm2[i], norm_inf[i]])
+                            [dataset_i, mode_name, attack_set[i], attack_N, trade_off_c, eps_i, pixel_k,
+                             success_rate[i], time[i], confidence[i], norm0[i], norm1[i], norm2[i], norm_inf[i]])
     current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     with open('./Checkpoint/%s_%s.pkl' % (job_name, current_time), 'wb') as f:
         pickle.dump(res_data, f)
@@ -579,40 +594,63 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(123)
 
     batch_size = 1
-    attack_N = 100
+    attack_N = 500
     # pixel_k_set = [20]
     # pixel_k_set = [5, 10, 15]
     # pixel_k_set = [10]
-    attack_method_set = [
-        'limited_BFGS_CW',
-        'limited_BFGS_CE',
-        'limited_BFGS_CW_LOG',
-        'limited_FGSM',
-        'limited_CW',
+    attack_set = [
+        # 'limited_BFGS_CW',
+        # 'limited_BFGS_CE',
+        # 'limited_BFGS_CW_LOG',
+        # 'limited_FGSM',
+        # 'limited_CW',
+        'SparseFool'
     ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
     mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
     cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet34', 'ResNet101', 'DenseNet121'
     svhn_model_name_set = ['Res20_SVHN']
     # imagenet_model_name_set = ['ResNet18_ImageNet']
-    imagenet_model_name_set = ['ResNet34_ImageNet']
+    imagenet_model_name_set = ['ResNet34_ImageNet', 'VGG19_ImageNet']
     # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
 
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
-    job_name = 'imagenet_%d_100acc_20pixel_1e3' % attack_N
+    job_name = 'sparsefool_iter200_%d_100acc_20pixel_1e3' % attack_N
     attack_many_model(job_name,
-                      # ['MNIST'],
-                      ['ImageNet'],
-                      # [mnist_model_name_set,],
-                      [imagenet_model_name_set],
+                      ['CIFAR10', 'SVHN'],
+                      # ['ImageNet'],
+                      [cifar10_model_name_set, svhn_model_name_set],
+                      # [imagenet_model_name_set],
                       attack_N,
-                      attack_method_set,
+                      attack_set,
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
-                      pixel_k_set=[20,
-                                   # 40, 60, 80, 100
+                      pixel_k_set=[20, 40, 60, 80, 100
                                    ]
+                      # pixel_k_set=[20]
+                      )
+
+    job_name = 'imagenet_%d_100acc_20pixel_1e3' % attack_N
+    attack_set = [
+        'limited_BFGS_CW',
+        'limited_BFGS_CE',
+        'limited_BFGS_CW_LOG',
+        'limited_FGSM',
+        'limited_CW',
+        # 'SparseFool'
+    ]
+    attack_N = 1000
+    attack_many_model(job_name,
+                      ['ImageNet'],
+                      # [cifar10_model_name_set, svhn_model_name_set],
+                      [imagenet_model_name_set],
+                      attack_N,
+                      attack_set=attack_set,
+                      batch_size=1,
+                      eps_set=[1.0],
+                      trade_off_c=1e3,
+                      pixel_k_set=[20, 40, 60, 80, 100]
                       # pixel_k_set=[20]
                       )
 
@@ -622,7 +660,7 @@ if __name__ == '__main__':
     #                   # [mnist_model_name_set, cifar10_model_name_set, svhn_model_name_set],
     #                   [cifar10_model_name_set],
     #                   attack_N,
-    #                   attack_method_set,
+    #                   attack_set,
     #                   batch_size=1,
     #                   eps_set=[1.0],
     #                   trade_off_c=1e3,
@@ -632,7 +670,7 @@ if __name__ == '__main__':
     # attack_many_model('CIFAR10',
     #                   cifar10_model_name_set,
     #                   attack_N,
-    #                   attack_method_set,
+    #                   attack_set,
     #                   batch_size,
     #                   eps_set=[1.0],
     #                   pixel_k_set=pixel_k_set
