@@ -520,7 +520,8 @@ def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_set, b
     import datetime
     # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     res_data = [['dataset', 'mode_name', 'attack_method', 'attack_num', 'constant c', 'eps_i', 'pixel_k',
-                 'attack_success', 'time(s)', 'confidence', 'noise_norm0', 'noise_norm1', 'noise_norm2', 'noise_norm_inf']]
+                 'attack_success', 'confidence', 'noise_norm0', 'noise_norm1', 'noise_norm2',
+                 'noise_norm_inf', 'time(s)']]
     for set_i, dataset_i in enumerate(dataset):
         test_loader, test_dataset_size = load_dataset(dataset_i, batch_size, is_shuffle=True)
         for mode_name in model_name_set[set_i]:
@@ -547,7 +548,7 @@ def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_set, b
                     for i in range(len(success_rate_list)):
                         res_data.append(
                             [dataset_i, mode_name, attack_set[i], attack_N, trade_off_c, eps_i, pixel_k,
-                             success_rate[i], time[i], confidence[i], norm0[i], norm1[i], norm2[i], norm_inf[i]])
+                             success_rate[i], confidence[i], norm0[i], norm1[i], norm2[i], norm_inf[i], time[i]])
     current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     with open('./Checkpoint/%s_%s.pkl' % (job_name, current_time), 'wb') as f:
         pickle.dump(res_data, f)
@@ -598,31 +599,31 @@ if __name__ == '__main__':
     # pixel_k_set = [20]
     # pixel_k_set = [5, 10, 15]
     # pixel_k_set = [10]
-    attack_set = [
-        # 'limited_BFGS_CW',
-        # 'limited_BFGS_CE',
-        # 'limited_BFGS_CW_LOG',
-        # 'limited_FGSM',
-        # 'limited_CW',
-        'SparseFool'
-    ]  # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
+    # 'FGSM', 'I_FGSM', 'PGD', 'MI_FGSM', 'Adam_FGSM','Adam_FGSM_incomplete'
     mnist_model_name_set = ['FC_256_128']  # 'LeNet5', 'FC_256_128'
     cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet34', 'ResNet101', 'DenseNet121'
     svhn_model_name_set = ['Res20_SVHN']
     # imagenet_model_name_set = ['ResNet18_ImageNet']
-    imagenet_model_name_set = ['ResNet34_ImageNet', 'VGG19_ImageNet']
+    imagenet_model_name_set = ['ResNet34_ImageNet', ]
     # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
 
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
-    job_name = 'sparsefool_iter200_%d_100acc_20pixel_1e3' % attack_N
+    job_name = 'svhn_sparsefool_iter200_%d_100acc_20pixel_1e3' % attack_N
     attack_many_model(job_name,
-                      ['CIFAR10', 'SVHN'],
+                      ['SVHN'],
                       # ['ImageNet'],
-                      [cifar10_model_name_set, svhn_model_name_set],
+                      [svhn_model_name_set],
                       # [imagenet_model_name_set],
-                      attack_N,
-                      attack_set,
+                      attack_N=500,
+                      attack_set=[
+                          'limited_BFGS_CW',
+                          'limited_BFGS_CE',
+                          'limited_BFGS_CW_LOG',
+                          'limited_FGSM',
+                          'limited_CW',
+                          # 'SparseFool'
+                      ],
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
@@ -632,21 +633,19 @@ if __name__ == '__main__':
                       )
 
     job_name = 'imagenet_%d_100acc_20pixel_1e3' % attack_N
-    attack_set = [
-        'limited_BFGS_CW',
-        'limited_BFGS_CE',
-        'limited_BFGS_CW_LOG',
-        'limited_FGSM',
-        'limited_CW',
-        # 'SparseFool'
-    ]
-    attack_N = 1000
     attack_many_model(job_name,
                       ['ImageNet'],
                       # [cifar10_model_name_set, svhn_model_name_set],
                       [imagenet_model_name_set],
-                      attack_N,
-                      attack_set=attack_set,
+                      attack_N=1000,
+                      attack_set=[
+                          'limited_BFGS_CW',
+                          'limited_BFGS_CE',
+                          'limited_BFGS_CW_LOG',
+                          'limited_FGSM',
+                          'limited_CW',
+                          # 'SparseFool'
+                      ],
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
