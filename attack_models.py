@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 from pytorchcv.model_provider import get_model as ptcv_get_model
 import torch.nn.functional as F
 from minimize import minimize
-from pixel_selector import (inf2box, box2inf,
-                            select_major_contribution_pixels, major_contribution_pixels_idx)
+from pixel_selector import inf2box, box2inf
+from pixel_selector import select_major_contribution_pixels, major_contribution_pixels_idx, major_saliency_pixels_idx
 from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_PGDL2, Limited_CW, Limited_CW3, Limited_CW2
 from torchattacks import SparseFool
 from prefetch_generator import BackgroundGenerator
@@ -120,7 +120,7 @@ def load_model_args(model_name):
         # model = torchvision.models.densenet121(pretrained=True)
         return model, 100 - 21.91
     else:
-        raise RuntimeError('Unknown model!!!')
+        raise Exception('Unknown model!!!')
     check_point = torch.load('./Checkpoint/%s.pth' % (model_name), map_location='cuda:0')
     model.load_state_dict(check_point['model'])
     print(model_name, 'has been load！', check_point['test_acc'])
@@ -165,7 +165,7 @@ def load_dataset(dataset, batch_size, is_shuffle=False, pin=True):
         test_dataset = datasets.SVHN(root='./DataSet/SVHN', split='test', transform=data_tf, download=True)
         test_dataset_size = 10000
     else:
-        raise RuntimeError('Unknown dataset')
+        raise Exception('Unknown dataset')
     test_loader = DataLoaderX(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle, num_workers=2)
 
     return test_loader, test_dataset_size
@@ -305,9 +305,9 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
             end = time.perf_counter()
             return adv_images, end - start
         else:
-            raise RuntimeError('unknown BFGS attack')
+            raise Exception('unknown BFGS attack')
 
-    raise RuntimeError('Unknown attack method')
+    raise Exception('Unknown attack method')
 
 
 def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, trade_off_c, pixel_k):
@@ -375,8 +375,8 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
             # 为了保证不越界，全部分类不正确时要及时退出，避免下面的计算
             continue
 
-        pixel_idx, attribution_abs = major_contribution_pixels_idx(model, images, labels, pixel_k)
-
+        # pixel_idx, attribution_abs = major_contribution_pixels_idx(model, images, labels, pixel_k)
+        pixel_idx, attribution_abs = major_saliency_pixels_idx(model, images, labels, pixel_k)
         acc_num_before_attack += predict_answer.sum().item()
         # 统计神经网络分类正确的样本的个数总和
         # valid_attack_num += labels.shape[0]
@@ -396,7 +396,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
             noise_norm2 = torch.linalg.norm(noise, ord=2, dim=1)
             noise_norm_inf = torch.linalg.norm(noise, ord=float('inf'), dim=1)
 
-            # 记录每一个攻击方法在每一批次的攻击成功个数
+            # 记录每一个攻击方法在每一个批次的攻击成功个数
             attack_success_num[idx] += (labels != predict).sum().item()
             # 记录误分类置信度
             # 攻击成功的对抗样本的置信度
@@ -430,7 +430,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
                 # A = torch.zeros(size=(images.numel(), pixel_k), device=images.device, dtype=torch.float)
                 # # KP = torch.zeros(k, device=images.device, dtype=torch.float)
                 # # 找到矩阵A, 满足 image = A*KP+RP, A:n*k; KP:k*1; C:n*1
-                # idx, attributions_abs = major_contribution_pixels_idx(model, images, labels, pixel_k)
+                # idx, attributions_abs = (model, images, labels, pixel_k)
                 # attr_min, attr_max = attributions_abs.min().item(), attributions_abs.max().item()
                 # attributions_abs_img = (attributions_abs - attr_min) / \
                 #                        (attr_max - attr_min)
@@ -595,7 +595,7 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(123)
 
     batch_size = 1
-    attack_N = 500
+    attack_N = 1000
     # pixel_k_set = [20]
     # pixel_k_set = [5, 10, 15]
     # pixel_k_set = [10]
@@ -609,34 +609,12 @@ if __name__ == '__main__':
 
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
-    job_name = 'svhn_sparsefool_iter200_%d_100acc_20pixel_1e3' % attack_N
+    job_name = 'salicency_iter200_%d_100acc_40pixel_1e3' % attack_N
     attack_many_model(job_name,
-                      ['SVHN'],
+                      ['CIFAR10', ],
                       # ['ImageNet'],
-                      [svhn_model_name_set],
+                      [cifar10_model_name_set],
                       # [imagenet_model_name_set],
-                      attack_N=500,
-                      attack_set=[
-                          'limited_BFGS_CW',
-                          'limited_BFGS_CE',
-                          'limited_BFGS_CW_LOG',
-                          'limited_FGSM',
-                          'limited_CW',
-                          # 'SparseFool'
-                      ],
-                      batch_size=1,
-                      eps_set=[1.0],
-                      trade_off_c=1e3,
-                      pixel_k_set=[20, 40, 60, 80, 100
-                                   ]
-                      # pixel_k_set=[20]
-                      )
-
-    job_name = 'imagenet_%d_100acc_20pixel_1e3' % attack_N
-    attack_many_model(job_name,
-                      ['ImageNet'],
-                      # [cifar10_model_name_set, svhn_model_name_set],
-                      [imagenet_model_name_set],
                       attack_N=1000,
                       attack_set=[
                           'limited_BFGS_CW',
@@ -649,9 +627,31 @@ if __name__ == '__main__':
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
-                      pixel_k_set=[20, 40, 60, 80, 100]
+                      pixel_k_set=[40
+                                   ]
                       # pixel_k_set=[20]
                       )
+
+    # job_name = 'imagenet_%d_100acc_20pixel_1e3' % attack_N
+    # attack_many_model(job_name,
+    #                   ['ImageNet'],
+    #                   # [cifar10_model_name_set, svhn_model_name_set],
+    #                   [imagenet_model_name_set],
+    #                   attack_N=1000,
+    #                   attack_set=[
+    #                       'limited_BFGS_CW',
+    #                       'limited_BFGS_CE',
+    #                       'limited_BFGS_CW_LOG',
+    #                       'limited_FGSM',
+    #                       'limited_CW',
+    #                       # 'SparseFool'
+    #                   ],
+    #                   batch_size=1,
+    #                   eps_set=[1.0],
+    #                   trade_off_c=1e3,
+    #                   pixel_k_set=[5, 10, 15, 20]
+    #                   # pixel_k_set=[20]
+    #                   )
 
     # attack_many_model(job_name,
     #                   # ['MNIST', 'CIFAR10', 'SVHN'],
