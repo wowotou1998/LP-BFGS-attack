@@ -31,10 +31,13 @@ class Limited_FGSM(Attack):
 
     """
 
-    def __init__(self, model, eps=0.007, pixel_k=1):
+    def __init__(self, model, A, KP, RP, eps=0.007):
         super().__init__("Limited_FGSM", model)
         self.eps = eps
-        self.pixel_k = pixel_k
+        self.A = A.clone().detach()
+        self.KP = KP.clone().detach()
+        self.RP = RP.clone().detach()
+
         self._supported_mode = ['default', 'targeted']
 
     def forward(self, images, labels):
@@ -48,7 +51,8 @@ class Limited_FGSM(Attack):
         # KP is a matrix, size is k*1
         # RP is a matrix, size is n*1
         original_shape = images_origin.shape
-        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, pixel_k=self.pixel_k)
+
+        A, KP, RP = self.A, self.KP, self.RP
         KP_origin = KP.detach().clone()
         KP.requires_grad = True
 
@@ -108,13 +112,17 @@ class Limited_CW3(Attack):
 
     """
 
-    def __init__(self, model, c=1, kappa=0, steps=200, lr=0.01, pixel_k=1):
+    def __init__(self, model, A, KP, RP, c=1, kappa=0, steps=200, lr=0.01, ):
         super().__init__("Limited_CW3", model)
+        self.A = A.clone().detach()
+        self.KP = KP.clone().detach()
+        self.RP = RP.clone().detach()
+
         self.c = c
         self.kappa = kappa
         self.steps = steps
         self.lr = lr
-        self.pixel_k = pixel_k
+
         self._supported_mode = ['default', 'targeted']
 
     def forward(self, images, labels):
@@ -128,7 +136,7 @@ class Limited_CW3(Attack):
         # KP is a matrix, size is k*1
         # RP is a matrix, size is n*1
         original_shape = images_origin.shape
-        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, pixel_k=self.pixel_k)
+        A, KP, RP = self.A, self.KP, self.RP
         KP[KP == 0.0] = 0.1 / 255
         KP[KP == 1.0] = 1 - 0.1 / 255
         KP_origin = KP.detach().clone()
@@ -214,7 +222,7 @@ class Limited_CW3(Attack):
 
     # f-function in the paper
     def f(self, outputs, labels):
-        labels=labels.cpu()
+        labels = labels.cpu()
         one_hot_labels = torch.eye(len(outputs[0]))[labels].to(self.device)
 
         i, _ = torch.max((1 - one_hot_labels) * outputs, dim=1)  # get the second largest logit
@@ -224,6 +232,7 @@ class Limited_CW3(Attack):
             return torch.clamp((i - j), min=-self.kappa)
         else:
             return torch.clamp((j - i), min=-self.kappa)
+
 
 # deprecated
 class Limited_PGD(Attack):
@@ -251,13 +260,17 @@ class Limited_PGD(Attack):
 
     """
 
-    def __init__(self, model, eps=0.3,
-                 alpha=2 / 255, steps=40, pixel_k=1, random_start=True):
+    def __init__(self, model, A, KP, RP, eps=0.3,
+                 alpha=4 / 255, steps=40, random_start=True):
         super().__init__("Limited_PGD", model)
         self.eps = eps
         self.alpha = alpha
         self.steps = steps
-        self.pixel_k = pixel_k
+
+        self.A = A.clone().detach()
+        self.KP = KP.clone().detach()
+        self.RP = RP.clone().detach()
+
         self.random_start = random_start
         self._supported_mode = ['default', 'targeted']
 
@@ -273,7 +286,7 @@ class Limited_PGD(Attack):
         # RP is a matrix, size is n*1
 
         original_shape = images_origin.shape
-        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, self.pixel_k)
+        A, KP, RP = self.A, self.KP, self.RP
 
         def reconstruct_image(KP):
             adv_images = (A.mm(KP) + RP).reshape(original_shape)

@@ -100,8 +100,8 @@ def select_major_contribution_pixels(model, images, labels, pixel_k):
     A = torch.zeros(size=(n, k), device=images.device, dtype=torch.float)
     # KP = torch.zeros(k, device=images.device, dtype=torch.float)
     # 找到矩阵A, 满足 image = A*KP+RP, A:n*k; KP:k*1; C:n*1
-    # idx, attributions_abs = major_contribution_pixels_idx(model, images, labels, pixel_k)
-    idx, attributions_abs = major_saliency_pixels_idx(model, images, labels, pixel_k, num_class=10)
+    idx, attributions_abs = major_contribution_pixels_idx(model, images, labels, pixel_k)
+    # idx, attributions_abs = major_saliency_pixels_idx(model, images, labels, pixel_k, num_class=10)
 
     KP = images.detach().clone().flatten()[idx].view(-1, 1)
 
@@ -149,4 +149,4 @@ def select_major_contribution_pixels(model, images, labels, pixel_k):
     # A is a matrix, size is n*k
     # KP is a matrix, size is k*1
     # RP is a matrix, size is n*1
-    return A, KP, RP
+    return idx, A, KP, RP

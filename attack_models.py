@@ -17,9 +17,9 @@ from pixel_selector import select_major_contribution_pixels, major_contribution_
 from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_PGDL2, Limited_CW, Limited_CW3, Limited_CW2
 from torchattacks import SparseFool
 from prefetch_generator import BackgroundGenerator
-# prepare your pytorch model as "model"
-# prepare a batch of data and label as "cln_data" and "true_label"
-# ...
+from advertorch.attacks import JSMA
+from torch import nn
+
 import pickle
 
 import numpy as np
@@ -171,36 +171,41 @@ def load_dataset(dataset, batch_size, is_shuffle=False, pin=True):
     return test_loader, test_dataset_size
 
 
-def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pixel_k):
+def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, A, KP, RP):
     if attack_name == 'limited_FGSM':
         start = time.perf_counter()
-        atk = Limited_FGSM(model, eps=eps, pixel_k=pixel_k)
+        atk = Limited_FGSM(model, A, KP, RP, eps=eps)
         adv_images = atk(images, labels)
         end = time.perf_counter()
         return adv_images, end - start
 
     if attack_name == 'limited_PGD':
         start = time.perf_counter()
-        atk = Limited_PGD(model, eps=eps, alpha=(1.5 * eps) / 200, steps=200, pixel_k=pixel_k)
+        atk = Limited_PGD(model, A, KP, RP, eps=eps, alpha=(1.5 * eps) / 200, steps=200)
         adv_images = atk(images, labels)
         end = time.perf_counter()
         return adv_images, end - start
     if attack_name == 'SparseFool':
         start = time.perf_counter()
-        atk = SparseFool(model, steps=200, lam=pixel_k * (4. / 100.))
+        atk = SparseFool(model, steps=200, lam=KP.numel() * (4. / 100.))
         adv_images = atk(images, labels)
         end = time.perf_counter()
         return adv_images, end - start
-    # if attack_name == 'limited_PGDL2':
-    #     start = time.perf_counter()
-    #     atk = Limited_PGDL2(model, eps=eps, alpha=0.27, steps=20, pixel_k=pixel_k)
-    #     adv_images = atk(images, labels)
-    #     end = time.perf_counter()
-    #     return adv_images, end - start
+
+    if attack_name == 'JSMA':
+        start = time.perf_counter()
+        # if theta<0, it will be an untarget attack
+        atk = JSMA(model, num_classes=10, theta=-1.0, gamma=1.0 * KP.numel() / RP.numel(),
+                   loss_fn=nn.CrossEntropyLoss(reduction="sum"),
+                   clip_min=0.0, clip_max=1.0)
+
+        adv_images = atk.perturb(images, labels)
+        end = time.perf_counter()
+        return adv_images, end - start
 
     if attack_name == 'limited_CW':
         start = time.perf_counter()
-        atk = Limited_CW3(model, c=trade_off_c, steps=200, pixel_k=pixel_k)
+        atk = Limited_CW3(model, A, KP, RP, c=trade_off_c, steps=200)
         # atk = torchattacks.CW(model, c=1)
         adv_images = atk(images, labels)
         end = time.perf_counter()
@@ -210,7 +215,7 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, pix
         x0 = images.detach().clone()[0:1]
         labels = labels[0:1]
         original_shape = x0.shape
-        A, KP_box, C0 = select_major_contribution_pixels(model, x0, labels, pixel_k)
+        A, KP_box, C0 = A.detach().clone(), KP.detach().clone(), RP.detach().clone()
 
         KP_box[KP_box == 0.0] = 0.1 / 255.
         KP_box[KP_box == 1.0] = 1 - 0.1 / 255.
@@ -376,7 +381,8 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
             continue
 
         # pixel_idx, attribution_abs = major_contribution_pixels_idx(model, images, labels, pixel_k)
-        pixel_idx, attribution_abs = major_saliency_pixels_idx(model, images, labels, pixel_k)
+        # pixel_idx, attribution_abs = major_saliency_pixels_idx(model, images, labels, pixel_k)
+        pixel_idx, A, KP, RP = select_major_contribution_pixels(model, images, labels, pixel_k)
         acc_num_before_attack += predict_answer.sum().item()
         # 统计神经网络分类正确的样本的个数总和
         # valid_attack_num += labels.shape[0]
@@ -384,7 +390,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
         plot_titles = ['original: ' + str(labels[0].item())]
         for idx, attack_i in enumerate(attack_set):
             images_under_attack, time_i = attack_by_k_pixels(attack_i, model, images, labels, eps,
-                                                             trade_off_c, pixel_k)
+                                                             trade_off_c, A, KP, RP)
             b = images_under_attack.shape[0]
             time_i = torch.as_tensor([time_i] * b, device=device).view(b, -1)
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
@@ -609,7 +615,7 @@ if __name__ == '__main__':
 
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
-    job_name = 'salicency_iter200_%d_100acc_40pixel_1e3' % attack_N
+    job_name = 'salicency_iter200_%d_100acc_20pixel_1e3' % attack_N
     attack_many_model(job_name,
                       ['CIFAR10', ],
                       # ['ImageNet'],
@@ -627,9 +633,8 @@ if __name__ == '__main__':
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
-                      pixel_k_set=[40
-                                   ]
-                      # pixel_k_set=[20]
+                      # pixel_k_set=[40]
+                      pixel_k_set=[20]
                       )
 
     # job_name = 'imagenet_%d_100acc_20pixel_1e3' % attack_N
