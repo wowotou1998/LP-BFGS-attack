@@ -14,11 +14,10 @@ import torch.nn.functional as F
 from minimize import minimize
 from pixel_selector import inf2box, box2inf
 from pixel_selector import select_major_contribution_pixels, major_contribution_pixels_idx, major_saliency_pixels_idx
-from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_PGDL2, Limited_CW, Limited_CW3, Limited_CW2
+from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_CW3, JSMA
 from torchattacks import SparseFool
 from prefetch_generator import BackgroundGenerator
-from advertorch.attacks import JSMA
-from torch import nn
+# from advertorch.attacks import JSMA
 
 import pickle
 
@@ -195,11 +194,12 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, A, 
     if attack_name == 'JSMA':
         start = time.perf_counter()
         # if theta<0, it will be an untarget attack
-        atk = JSMA(model, num_classes=10, theta=-1.0, gamma=1.0 * KP.numel() / RP.numel(),
-                   loss_fn=nn.CrossEntropyLoss(reduction="sum"),
-                   clip_min=0.0, clip_max=1.0)
+        atk = JSMA(model, num_classes=10,
+                   theta=1., gamma=1.0 * KP.numel() / RP.numel(),
+                   clip_min=0.0, clip_max=1.0,
+                   )
 
-        adv_images = atk.perturb(images, labels)
+        adv_images = atk(images, labels)
         end = time.perf_counter()
         return adv_images, end - start
 
@@ -341,7 +341,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
     noise_norm2_ave = torch.zeros(len(attack_set), dtype=torch.float, device=device)
     noise_norm_inf_ave = torch.zeros(len(attack_set), dtype=torch.float, device=device)
 
-    # every epoch has 64 images ,every images has 1 channel and the channel size is 28*28
+    # every epoch has 64 images ,every image has 1 channel and the channel size is 28*28
     pbar = tqdm(total=test_loader_size)
     model.to(device)
     model.eval()
@@ -394,6 +394,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
             b = images_under_attack.shape[0]
             time_i = torch.as_tensor([time_i] * b, device=device).view(b, -1)
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
+
             noise = images_under_attack.detach().clone().view(images.shape[0], -1) - \
                     images.detach().clone().view(images.shape[0], -1)
             noise = torch.index_select(noise, 1, pixel_idx)
@@ -498,7 +499,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
     attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
     # attack_success_num[attack_success_num == 0] = float('inf'), 防止出现除 0 溢出 inf
     no_zero_index = attack_success_num != 0
-    time_ave[no_zero_index] = (time_total[no_zero_index] / attack_success_num[no_zero_index])
+    time_ave[no_zero_index] = (time_total[no_zero_index] / attack_success_num[no_zero_index]) * 1000.
     confidence_ave[no_zero_index] = (confidence_total[no_zero_index] / attack_success_num[no_zero_index])
     noise_norm0_ave[no_zero_index] = (noise_norm0_total[no_zero_index] / attack_success_num[no_zero_index])
     noise_norm1_ave[no_zero_index] = (noise_norm1_total[no_zero_index] / attack_success_num[no_zero_index])
@@ -508,7 +509,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
     print('model acc %.2f' % (acc_num_before_attack / sample_num))
     for i in range(len(attack_set)):
         print(
-            'eps=%.2f, pixel_k=%d, %s ASR=%.2f%%,time=%.2f(\mu s) confidence=%.2f, norm(0)=%.2f,norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
+            'eps=%.2f, pixel_k=%d, %s ASR=%.2f%%,time=%.2f(ms) confidence=%.2f, norm(0)=%.2f,norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
                 eps, pixel_k,
                 attack_set[i],
                 attack_success_rate[i],
@@ -527,7 +528,7 @@ def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_set, b
     # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     res_data = [['dataset', 'mode_name', 'attack_method', 'attack_num', 'constant c', 'eps_i', 'pixel_k',
                  'attack_success', 'confidence', 'noise_norm0', 'noise_norm1', 'noise_norm2',
-                 'noise_norm_inf', 'time(s)']]
+                 'noise_norm_inf', 'time(ms)']]
     for set_i, dataset_i in enumerate(dataset):
         test_loader, test_dataset_size = load_dataset(dataset_i, batch_size, is_shuffle=True)
         for mode_name in model_name_set[set_i]:
@@ -610,17 +611,17 @@ if __name__ == '__main__':
     cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet34', 'ResNet101', 'DenseNet121'
     svhn_model_name_set = ['Res20_SVHN']
     # imagenet_model_name_set = ['ResNet18_ImageNet']
-    imagenet_model_name_set = ['ResNet34_ImageNet', ]
+    imagenet_model_name_set = ['VGG19_ImageNet', 'ResNet34_ImageNet', ]
     # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
 
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
-    job_name = 'salicency_iter200_%d_100acc_20pixel_1e3' % attack_N
+    job_name = 'jsma_iter200_%d_100acc_20pixel_1e3' % attack_N
     attack_many_model(job_name,
-                      ['CIFAR10', ],
-                      # ['ImageNet'],
-                      [cifar10_model_name_set],
-                      # [imagenet_model_name_set],
+                      # ['CIFAR10', ],
+                      ['ImageNet'],
+                      # [cifar10_model_name_set],
+                      [imagenet_model_name_set],
                       attack_N=1000,
                       attack_set=[
                           'limited_BFGS_CW',
@@ -628,13 +629,14 @@ if __name__ == '__main__':
                           'limited_BFGS_CW_LOG',
                           'limited_FGSM',
                           'limited_CW',
-                          # 'SparseFool'
+                          # 'SparseFool',
+                          # 'JSMA'
                       ],
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
                       # pixel_k_set=[40]
-                      pixel_k_set=[20]
+                      pixel_k_set=[20, 40, 60, 80, 100]
                       )
 
     # job_name = 'imagenet_%d_100acc_20pixel_1e3' % attack_N

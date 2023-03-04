@@ -16,8 +16,7 @@ import torch
 from advertorch.utils import clamp
 from advertorch.utils import jacobian
 
-from .base import Attack
-from .base import LabelMixin
+
 
 
 class JacobianSaliencyMapAttack(Attack, LabelMixin):
