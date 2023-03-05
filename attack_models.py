@@ -67,6 +67,29 @@ def show_images(images, titles, ):
     # fig.savefig('pixel_selecor.pdf')
 
 
+def random_target(y_original, num_classes):
+    import random
+    """
+    Draw random target labels all of which are different and not the original label.
+    Args:
+        original_label(int): Original label.
+    Return:
+        target_labels(list): random target labels
+    """
+    y_adv = torch.zeros_like(y_original, device=y_original.device, dtype=int)
+    batch, _ = y_original.shape
+    # sample(list, k) 返回一个长度为k新列表，新列表存放list所产生k个随机唯一的元素
+    for i in range(batch):
+        # 随机标签列表
+        y_o_i = y_original[i].item()
+        label_set = list(range(num_classes))
+        label_set_2 = label_set[0:y_o_i] + label_set[y_o_i + 1:num_classes]
+        y_adv_i = random.sample(label_set_2, 1)
+        y_adv[i] = y_adv_i
+
+    return y_adv
+
+
 # def generate_attack_method(attack_name, model, epsilon, Iterations, Momentum):
 #     if attack_name == 'FGSM':
 #         atk = torchattacks.FGSM(model, eps=epsilon)
@@ -199,7 +222,7 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, A, 
                    clip_min=0.0, clip_max=1.0,
                    )
 
-        adv_images = atk(images, labels)
+        adv_images = atk(images, random_target(labels, num_classes=10))
         end = time.perf_counter()
         return adv_images, end - start
 
@@ -616,12 +639,12 @@ if __name__ == '__main__':
 
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
-    job_name = 'jsma_iter200_%d_100acc_20pixel_1e3' % attack_N
+    job_name = 'mni_cifar_iter200_%d_100acc_20pixel_1e3' % attack_N
     attack_many_model(job_name,
-                      # ['CIFAR10', ],
-                      ['ImageNet'],
-                      # [cifar10_model_name_set],
-                      [imagenet_model_name_set],
+                      ['MNIST', 'CIFAR10', ],
+                      # ['ImageNet'],
+                      [mnist_model_name_set, cifar10_model_name_set, svhn_model_name_set],
+                      # [imagenet_model_name_set],
                       attack_N=1000,
                       attack_set=[
                           'limited_BFGS_CW',
@@ -629,7 +652,7 @@ if __name__ == '__main__':
                           'limited_BFGS_CW_LOG',
                           'limited_FGSM',
                           'limited_CW',
-                          # 'SparseFool',
+                          'SparseFool',
                           # 'JSMA'
                       ],
                       batch_size=1,

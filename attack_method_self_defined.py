@@ -38,8 +38,7 @@ class JSMA(Attack):
     def __init__(self, model, num_classes,
                  clip_min=0.0, clip_max=1.0,
                  theta=1.0, gamma=1.0,
-                 comply_cleverhans=False,
-                 target=False):
+                 comply_cleverhans=False, ):
         super().__init__('JSMA', model)
         self.num_classes = num_classes
         self.theta = theta
@@ -48,7 +47,7 @@ class JSMA(Attack):
         self.clip_min = clip_min
         self.clip_max = clip_max
         self.comply_cleverhans = comply_cleverhans
-        self.targeted = target
+        self.targeted = True
 
         self._supported_mode = ['default', 'targeted']
 
@@ -63,6 +62,7 @@ class JSMA(Attack):
         x = x.detach().clone()
         y = y.detach().clone()
         return x, y
+
 
     def _get_predicted_label(self, x):
         """
@@ -89,10 +89,10 @@ class JSMA(Attack):
         # 通过广播机制，构建大小为 [dim_x,dim_x] 的矩阵，矩阵第(i,j)号元素的内容为某个类别对像素i的偏导 grad_i 与 对像素j的偏导grad_j相加之后的结果
         return grads.view(-1, dim_x, 1) + grads.view(-1, 1, dim_x)
 
-    def _and_pair(self, cond, dim_x):
+    def _and_pair(self, condition, dim_x):
         # 通过广播机制，构建大小为 [dim_x,dim_x] 的矩阵，矩阵第(i,j)号元素的内容为 cond_i 与 cond_j做 与运算 之后的结果
         # 这个操作可以用来确定本次迭代能更改的两个像素的下标
-        return cond.view(-1, dim_x, 1) & cond.view(-1, 1, dim_x)
+        return condition.view(-1, dim_x, 1) & condition.view(-1, 1, dim_x)
 
     def _saliency_map(self, search_space, grads_target, grads_other, y):
 
@@ -103,13 +103,14 @@ class JSMA(Attack):
         # beta in Algorithm 3 line 3
         gradsum_other = self._sum_pair(grads_other, dim_x)
 
+        # 无论 theta 是大于0还是小于0，都是有目标攻击
         if self.theta > 0:
-            # 如果 theta>0, 表示这是一次有目标攻击
+            # 如果 theta>0, 则使用原论文中的公式（8）来计算攻击显著图
             # 这里根据梯度和的结果构建 mask，选择 目标类别对两个像素的偏导和>0且其他类别对两个像素的偏导和<0的mask
             scores_mask = (torch.gt(gradsum_target, 0) &
                            torch.lt(gradsum_other, 0))
         else:
-            # 如果 theta<=0, 表示这是无目标攻击
+            # 如果 theta<=0, 则使用原论文中的公式（9）来计算攻击显著图
             # 这里根据梯度和的结果构建 mask，选择 目标类别对两个像素的偏导和<0且其他类别对两个像素的偏导和>0的mask
             scores_mask = (torch.lt(gradsum_target, 0) &
                            torch.gt(gradsum_other, 0))
@@ -143,21 +144,21 @@ class JSMA(Attack):
         p2 = (best / dim_x).long()
         return p1, p2, valid
 
-    def _modify_xadv(self, xadv, batch_size, cond, p1, p2):
+    def _modify_xadv(self, xadv, batch_size, condition, p1, p2):
         ori_shape = xadv.shape
         xadv = xadv.view(batch_size, -1)
         for idx in range(batch_size):
             # 如果还有攻击的条件，那就继续攻击，没条件就不做任何操作
-            if cond[idx] != 0:
+            if condition[idx] != 0:
                 xadv[idx, p1[idx]] += self.theta
                 xadv[idx, p2[idx]] += self.theta
         xadv = clamp(xadv, min=self.clip_min, max=self.clip_max)
         xadv = xadv.view(ori_shape)
         return xadv
 
-    def _update_search_space(self, search_space, p1, p2, cond):
-        for idx in range(len(cond)):
-            if cond[idx] != 0:
+    def _update_search_space(self, search_space, p1, p2, condition):
+        for idx in range(len(condition)):
+            if condition[idx] != 0:
                 search_space[idx, p1[idx]] -= 1
                 search_space[idx, p2[idx]] -= 1
 
@@ -172,18 +173,20 @@ class JSMA(Attack):
         yadv = self._get_predicted_label(xadv)
 
         # Algorithm 1
-        while ((y == yadv).any() and curr_step < max_iters):
+        # 这里 y！=yadv while循环继续则表明当前进行的是有目标攻击
+        while ((y != yadv).any() and curr_step < max_iters):
             grads_target, grads_other = self._compute_forward_derivative(xadv, y)
 
             # Algorithm 3
             p1, p2, valid = self._saliency_map(search_space, grads_target, grads_other, y)
             # 如果 攻击没成功 且 还有可以选择的像素；那就继续进行攻击
-            # 这里的cond记录batch中每个样本还有没有继续攻击的条件（condition），如果没有条件，就不进行攻击
-            cond = (y == yadv) & valid
+            # 这里的 condition 记录batch中每个样本还有没有继续攻击的条件，如果没有条件，就不进行攻击
+            # 还是在判定是否继续目标攻击
+            condition = (y != yadv) & valid
             # 更新搜索空间
-            self._update_search_space(search_space, p1, p2, cond)
+            self._update_search_space(search_space, p1, p2, condition)
             # 更新一个批次中每个样本的扰动
-            xadv = self._modify_xadv(xadv, batch_size, cond, p1, p2)
+            xadv = self._modify_xadv(xadv, batch_size, condition, p1, p2)
             # 做预测
             yadv = self._get_predicted_label(xadv)
 
