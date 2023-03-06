@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torchattacks.attack import Attack
-from pixel_selector import select_major_contribution_pixels
+from pixel_selector import pixel_selector_by_attribution
 import torch.optim as optim
 import torch.nn.functional as F
 
@@ -567,7 +567,7 @@ class Limited_PGDL2(Attack):
         # RP is a matrix, size is n*1
 
         original_shape = images_origin.shape
-        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, self.pixel_k)
+        A, KP, RP = pixel_selector_by_attribution(self.model, images_origin, labels, self.pixel_k)
 
         def reconstruct_image(KP):
             adv_images = (A.mm(KP) + RP).reshape(original_shape)
@@ -649,7 +649,7 @@ class Limited_CW2(Attack):
         img = images.clone().detach()
         pre_label = labels.clone().detach()
 
-        A, KP, RP = select_major_contribution_pixels(self.model, img, labels, self.pixel_k)
+        A, KP, RP = pixel_selector_by_attribution(self.model, img, labels, self.pixel_k)
 
         def reconstruct_image(adv_KP):
             adv_images = (A.mm(adv_KP) + RP).reshape(original_shape)
@@ -876,7 +876,7 @@ class Limited_CW(Attack):
             target_labels = self._get_target_label(images, labels)
 
         original_shape = images_origin.shape
-        A, KP, RP = select_major_contribution_pixels(self.model, images_origin, labels, self.pixel_k)
+        A, KP, RP = pixel_selector_by_attribution(self.model, images_origin, labels, self.pixel_k)
 
         adv_KP = KP.clone().detach()
         adv_KP[adv_KP == 0.0] = 1. / 255 * 0.1

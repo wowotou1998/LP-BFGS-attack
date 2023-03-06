@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torchattacks
 import torchvision.models
@@ -13,7 +15,7 @@ from pytorchcv.model_provider import get_model as ptcv_get_model
 import torch.nn.functional as F
 from minimize import minimize
 from pixel_selector import inf2box, box2inf
-from pixel_selector import select_major_contribution_pixels, major_contribution_pixels_idx, major_saliency_pixels_idx
+from pixel_selector import pixel_selector_by_attribution, pixel_attribution_sort, pixel_saliency_sort
 from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_CW3, JSMA
 from torchattacks import SparseFool
 from prefetch_generator import BackgroundGenerator
@@ -106,6 +108,7 @@ def random_target(y_original, num_classes):
 
 
 def load_model_args(model_name):
+    import os
     assert os.path.isdir('./Checkpoint'), 'Error: no checkpoint directory found!'
     if model_name == 'LeNet5':
         model = lenet5()
@@ -247,8 +250,11 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, A, 
         CELoss = nn.CrossEntropyLoss()
         MSELoss = nn.MSELoss(reduction='none')
         Flatten = nn.Flatten()
+        B_inf_min = math.atanh(-1. + 0.1 / 255.)
+        B_inf_max = math.atanh(1. - 0.1 / 255.)
 
         def cw_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            B_inf = torch.clamp(B_inf, min=B_inf_min, max=B_inf_max)
             kappa = 0
             c = trade_off_c
             KP_box = inf2box(B_inf)
@@ -270,6 +276,7 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, A, 
             return cost
 
         def cw_log_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
+            B_inf = torch.clamp(B_inf, min=B_inf_min, max=B_inf_max)
             kappa = 0
             labels = labels.cpu()
             c = trade_off_c
@@ -292,6 +299,9 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, A, 
 
         def ce_loss(B_inf, labels=labels.detach().clone(), init_images=images.detach().clone()):
             c = trade_off_c
+            # 虽然 B_inf 的取值范围是-∞到+∞，但还是要对 B_inf 的最大值最小值做限制，不然的话就会出现 Nan
+            B_inf = torch.clamp(B_inf, min=B_inf_min, max=B_inf_max)
+
             KP_box = inf2box(B_inf)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -379,6 +389,8 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
 
         batch_num = labels.shape[0]
         epoch_num += 1
+        # if epoch_num < 16:
+        #     continue
         sample_num += batch_num
         pbar.update(batch_num)
 
@@ -403,9 +415,9 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
             # 为了保证不越界，全部分类不正确时要及时退出，避免下面的计算
             continue
 
-        # pixel_idx, attribution_abs = major_contribution_pixels_idx(model, images, labels, pixel_k)
-        # pixel_idx, attribution_abs = major_saliency_pixels_idx(model, images, labels, pixel_k)
-        pixel_idx, A, KP, RP = select_major_contribution_pixels(model, images, labels, pixel_k)
+        # pixel_idx, attribution_abs = pixel_attribution_sort(model, images, labels, pixel_k)
+        # pixel_idx, attribution_abs = pixel_saliency_sort(model, images, labels, pixel_k)
+        pixel_idx, A, KP, RP = pixel_selector_by_attribution(model, images, labels, pixel_k)
         acc_num_before_attack += predict_answer.sum().item()
         # 统计神经网络分类正确的样本的个数总和
         # valid_attack_num += labels.shape[0]
@@ -640,26 +652,27 @@ if __name__ == '__main__':
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
     job_name = 'mni_cifar_iter200_%d_100acc_20pixel_1e3' % attack_N
+
     attack_many_model(job_name,
-                      ['MNIST', 'CIFAR10', ],
+                      ['MNIST', ],
                       # ['ImageNet'],
-                      [mnist_model_name_set, cifar10_model_name_set, svhn_model_name_set],
+                      [mnist_model_name_set, ],
                       # [imagenet_model_name_set],
-                      attack_N=1000,
+                      attack_N=20,
                       attack_set=[
-                          'limited_BFGS_CW',
+                          # 'limited_BFGS_CW',
                           'limited_BFGS_CE',
-                          'limited_BFGS_CW_LOG',
-                          'limited_FGSM',
-                          'limited_CW',
-                          'SparseFool',
+                          # 'limited_BFGS_CW_LOG',
+                          # 'limited_FGSM',
+                          # 'limited_CW',
+                          # 'SparseFool',
                           # 'JSMA'
                       ],
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
-                      # pixel_k_set=[40]
-                      pixel_k_set=[20, 40, 60, 80, 100]
+                      pixel_k_set=[40]
+                      # pixel_k_set=[20, 40, 60, 80, 100]
                       )
 
     # job_name = 'imagenet_%d_100acc_20pixel_1e3' % attack_N
