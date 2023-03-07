@@ -124,8 +124,8 @@ def plot_loss_3d(sample_original, label, model):
 
     # --------------------------准备基向量,确定坐标轴的大致形状---------------------------------
 
-    x_i = np.linspace(-1, 1, 50)
-    y_i = np.linspace(-1, 1, 50)
+    x_i = np.linspace(0, 1, 50)
+    y_i = np.linspace(0, 1, 50)
     ii, jj = np.meshgrid(x_i, y_i)  # 获得网格坐标矩阵
 
     sample_a = torch.zeros_like(sample_original, dtype=torch.float)
@@ -200,7 +200,7 @@ def select_a_sample_to_plot(dataset, mode_name):
 
 
 if __name__ == '__main__':
-    mpl.rcParams['font.sans-serif'] = ['Times New Roman']
+    mpl.rcParams['font.sans-serif'] = ['Arial']
     # 解决保存图像是负号'-'显示为方块的问题
     mpl.rcParams['axes.unicode_minus'] = False
     mpl.rcParams['savefig.dpi'] = 200  # 保存图片分辨率
@@ -214,15 +214,56 @@ if __name__ == '__main__':
     # mpl.rcParams['figure.constrained_layout.use'] = True
 
     model_name_set = ['VGG16', 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121']
+
+
     # select_a_sample_to_plot('MNIST',
     #                         'ResNet18_ImageNet',
     #                         Epsilon=5 / 255,
     #                         Iterations=10,
     #                         Momentum=1.0)
 
-    select_a_sample_to_plot('MNIST',
-                            'FC_256_128',
-                            )
+    # select_a_sample_to_plot('MNIST',
+    #                         'FC_256_128')
+    def example_plot(ax, fontsize=12, hide_labels=False):
+        pc = ax.pcolormesh(np.random.randn(30, 30), vmin=-2.5, vmax=2.5)
+        if not hide_labels:
+            ax.set_xlabel('x-label', fontsize=fontsize)
+            ax.set_ylabel('y-label', fontsize=fontsize)
+            ax.set_title('Title', fontsize=fontsize)
+        return pc
+
+
+    fig = plt.figure(layout='constrained', figsize=(10, 4))
+    subfigs = fig.subfigures(1, 2, wspace=0.07, width_ratios=[2, 1])
+
+    # -------------------sub-figure-1
+    # sharex 和 sharey 表示坐标轴的属性是否相同，可选的参数：True，False，row，col，默认值均为False，表示画布中的四个ax是相互独立的；
+    # True 表示所有子图的x轴（或者y轴）标签是相同的，
+    # row 表示每一行之间的子图的x轴（或者y轴）标签是相同的（不同行的子图的轴标签可以不同），
+    # col表示每一列之间的子图的x轴（或者y轴）标签是相同的（不同列的子图的轴标签可以不同）
+    axsLeft = subfigs[0].subplots(1, 2, sharey=True)
+    subfigs[0].set_facecolor('0.75')
+    for ax in axsLeft:
+        pc = example_plot(ax)
+    subfigs[0].suptitle('Left plots', fontsize='x-large')
+    subfigs[0].colorbar(pc, shrink=0.6, ax=axsLeft, location='bottom')
+
+    # ----------------sub-figure-2
+    axsRight = subfigs[1].subplots(3, 1, sharex=True)
+    for nn, ax in enumerate(axsRight):
+        pc = example_plot(ax, hide_labels=True)
+        if nn == 2:
+            ax.set_xlabel('xlabel')
+        if nn == 1:
+            ax.set_ylabel('ylabel')
+
+    subfigs[1].set_facecolor('0.85')
+    subfigs[1].colorbar(pc, shrink=0.6, ax=axsRight)
+    subfigs[1].suptitle('Right plots', fontsize='x-large')
+
+    fig.suptitle('Figure suptitle', fontsize='xx-large')
+
+    plt.show()
 
     print()
     print("----ALL WORK HAVE BEEN DONE!!!----")

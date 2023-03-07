@@ -63,7 +63,6 @@ class JSMA(Attack):
         y = y.detach().clone()
         return x, y
 
-
     def _get_predicted_label(self, x):
         """
         Compute predicted labels given x. Used to prevent label leaking
