@@ -3,6 +3,10 @@ from functools import reduce
 
 
 def _cubic_interpolate(x1, f1, g1, x2, f2, g2, bounds=None):
+    # print('x1, f1, g1, x2, f2, g2 in torch_line_search', x1, f1, g1, x2, f2, g2)
+    # this if condition is to avoid the Nan problem 1/0 will cause inf and Nan
+    if g1 == 0 and g2 == 0:
+        return (x1 + x2) / 2.
     # ported from https://github.com/torch/optim/blob/master/polyinterp.lua
     # Compute bounds of interpolation area
     if bounds is not None:
@@ -22,6 +26,7 @@ def _cubic_interpolate(x1, f1, g1, x2, f2, g2, bounds=None):
     if d2_square >= 0:
         d2 = d2_square.sqrt()
         if x1 <= x2:
+            # 这里除0会出现Nan
             min_pos = x2 - (x2 - x1) * ((g2 + d2 - d1) / (g2 - g1 + 2 * d2))
         else:
             min_pos = x1 - (x1 - x2) * ((g1 + d2 - d1) / (g1 - g2 + 2 * d2))
@@ -119,6 +124,7 @@ def _strong_wolfe(obj_func,
         # compute new trial value
         t = _cubic_interpolate(bracket[0], bracket_f[0], bracket_gtd[0],
                                bracket[1], bracket_f[1], bracket_gtd[1])
+        # print('t in _cubic_interpolate in torch_line_search.py', t)
 
         # test that we are making sufficient progress:
         # in case `t` is so close to boundary, we mark that we are making
@@ -143,6 +149,9 @@ def _strong_wolfe(obj_func,
             insuf_progress = False
 
         # Evaluate new point
+        # print('x in torch_line_search.py', x)
+        # print('t in torch_line_search.py', t)
+        # print('d in torch_line_search.py', d)
         f_new, g_new = obj_func(x, t, d)
         ls_func_evals += 1
         gtd_new = g_new.dot(d)

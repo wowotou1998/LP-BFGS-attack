@@ -303,7 +303,7 @@ class ScalarFunction(object):
         但是神经网络可能对数据要求的是一个高维tensor，
         因此在丢到神经网络之前， 我们需要对优化变量的形状进行重新 resize
         """
-
+        # print('line 309, in function.py', x)
         if x.shape != self._x_shape:
             x = x.view(self._x_shape)
         f = self._fun(x)

@@ -18,6 +18,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from torch import nn
 from attack_models import load_model_args, load_dataset
 from pixel_selector import pixel_attribution_sort
+import pickle
 
 
 # 相似性范围从-1到1：
@@ -107,66 +108,130 @@ def obtain_label_matrix(u, v, sample_a, sample_b, label, model):
     return result
 
 
-def plot_loss_3d(sample_original, label, model):
+def plot_loss_3d(image, label, model):
     # plt.show()
     # plt.figure(figsize=(8, 8))
     # 进行颜色填充
-    # plt.contourf(ii, jj, kk, 8, cmap='rainbow')
-    # plt.contourf(ii, jj, kk, 8, cmap='coolwarm')
+    # plt.contourf(X, Y, Z, 8, cmap='rainbow')
+    # plt.contourf(X, Y, Z, 8, cmap='coolwarm')
     # 进行等高线绘制
-    # contour = plt.contour(ii, jj, obtain_loss_matrix(ii, jj, sample_a, sample_b, label, model), 8, colors='black')
+    # contour = plt.contour(X, Y, obtain_loss_matrix(X, Y, sample_a, sample_b, label, model), 8, colors='black')
     # # 线条标注的绘制
     # plt.clabel(c, inline=True, fontsize=10)
-    device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
-    # -----------------------------分别找到两对像素---------
-    pixel_k = 2
-    idx, attributions_abs = pixel_attribution_sort(model, sample_original, label, pixel_k, FIND_MAX=False)
 
-    # --------------------------准备基向量,确定坐标轴的大致形状---------------------------------
+    def get_plot_data(FIND_MAX=True):
+        device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
 
-    x_i = np.linspace(0, 1, 50)
-    y_i = np.linspace(0, 1, 50)
-    ii, jj = np.meshgrid(x_i, y_i)  # 获得网格坐标矩阵
+        # -----------------------------分别找到两对像素---------
+        pixel_k = 2
+        idx, attributions_abs = pixel_attribution_sort(model, image, label, pixel_k, FIND_MAX)
 
-    sample_a = torch.zeros_like(sample_original, dtype=torch.float)
-    sample_b = torch.zeros_like(sample_original, dtype=torch.float)
-    sample_offset = sample_original.detach().clone()  # torch.rand(size=sample_original.shape)
-    #
-    sample_a = sample_a.flatten()
-    sample_a[idx[0]] = 1.
-    sample_a = sample_a.reshape(sample_original.shape)
-    #
-    sample_b = sample_b.flatten()
-    sample_b[idx[1]] = 1.
-    sample_b = sample_b.reshape(sample_original.shape)
+        # --------------------------准备基向量,确定坐标轴的大致形状---------------------------------
+        x_i = np.linspace(0, 1, 5)
+        y_i = np.linspace(0, 1, 5)
+        X, Y = np.meshgrid(x_i, y_i)  # 获得网格坐标矩阵
 
-    sample_a = sample_a.to(device)
-    sample_b = sample_b.to(device)
-    sample_offset = sample_offset.to(device)
+        sample_a = torch.zeros_like(image, dtype=torch.float)
+        sample_b = torch.zeros_like(image, dtype=torch.float)
+        sample_offset = image.detach().clone()  # torch.rand(size=image.shape)
+        #
+        sample_a = sample_a.flatten()
+        sample_a[idx[0]] = 1.
+        sample_a = sample_a.reshape(image.shape)
+        #
+        sample_b = sample_b.flatten()
+        sample_b[idx[1]] = 1.
+        sample_b = sample_b.reshape(image.shape)
+
+        sample_a = sample_a.to(device)
+        sample_b = sample_b.to(device)
+        sample_offset = sample_offset.to(device)
+        Z = obtain_loss_matrix(X, Y, sample_a, sample_b, sample_offset, label, model)
+        return X, Y, Z, attributions_abs
 
     # --------------------------绘制loss平面---------------------------------
-    kk = obtain_loss_matrix(ii, jj, sample_a, sample_b, sample_offset, label, model)
-    # kk = obtain_label_matrix(ii, jj, sample_a, sample_b, label, model)
+    # 获得三维数据
+    X, Y, Z, attri_score = get_plot_data(FIND_MAX=True)
+    X2, Y2, Z2, _ = get_plot_data(FIND_MAX=False)
+    plot_data = [X, Y, Z, attri_score, X2, Y2, Z2]
+
+    # with open('./Checkpoint/plot_data.pkl', 'rb') as f:
+    #     plot_data = pickle.load(f)
+    # X, Y, Z, attri_score, X2, Y2, Z2 = plot_data
+
+    y_min = min(Z.min(), Z2.min())
+    y_max = max(Z.max(), Z2.max())
+    y_min = y_min - 0.3 * (y_max - y_min)
+
+    attri_min = torch.min(attri_score).item()
+    attri_max = torch.max(attri_score).item()
+
+    sm = plt.cm.ScalarMappable(cmap='coolwarm', norm=plt.Normalize(vmin=y_min, vmax=y_max))
+    sm2 = plt.cm.ScalarMappable(cmap='Blues', norm=plt.Normalize(vmin=attri_min, vmax=attri_max))
+    # Z = obtain_label_matrix(X, Y, sample_a, sample_b, label, model)
 
     # 绘制曲面
-    from matplotlib import cm
+    fig = plt.figure(layout='constrained', figsize=(10, 4))
+    subfigs = fig.subfigures(1, 2, wspace=0.07, width_ratios=[2, 1])
+    subfigs[0].suptitle('Loss surface in different space')
 
-    fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
+    # -------------------sub-figure-0------------------
 
-    # Plot the 3D surface
-    surf = ax.plot_surface(ii, jj, kk, cmap=cm.rainbow)
+    ax1 = subfigs[0].add_subplot(1, 2, 1, projection='3d')
+    ax2 = subfigs[0].add_subplot(1, 2, 2, projection='3d')
+    # subfigs[0].set_facecolor('0.75')
+    ax1.plot_surface(X, Y, Z, cmap='coolwarm',
+                     norm=plt.Normalize(vmin=y_min, vmax=y_max), linewidth=0)
+    ax1.contour(X, Y, Z, zdir='z', offset=y_min, cmap='coolwarm',
+                norm=plt.Normalize(vmin=y_min, vmax=y_max))
+    ax1.set(xlabel=r'$x_1$', ylabel=r'$x_2$', zlabel='')
+    ax1.set_zlim((y_min, y_max))
+    ax1.set_title(r'Space spanned by pixel $x_1,x_2$')
 
-    # Plot projections of the contours for each dimension.
-    ax.contour(ii, jj, kk, zdir='z', offset=kk.min(), cmap=cm.rainbow)
+    ax1.view_init(30, 45)
+    ax2.plot_surface(X2, Y2, Z2, cmap='coolwarm',
+                     norm=plt.Normalize(vmin=y_min, vmax=y_max), linewidth=0)
 
-    ax.set(xlabel='Direction 1', ylabel='Direction 2', zlabel='Loss')
-    fig.colorbar(surf,
-                 fraction=0.023, pad=0.04
-                 # shrink=0.5, aspect=5
-                 )
-    # plt.tight_layout()
-    plt.show()
+    ax2.contour(X2, Y2, Z2, zdir='z', offset=y_min, cmap='coolwarm',
+                norm=plt.Normalize(vmin=y_min, vmax=y_max))
+    ax2.set(xlabel=r'$x_3$', ylabel=r'$x_4$', zlabel='')
+    ax2.set_zlim((y_min, y_max))
+    ax2.view_init(30, 45)
+    ax2.set_title(r'Space spanned by pixel $x_3,x_4$ ')
+    subfigs[0].colorbar(sm, shrink=0.6, ax=[ax1, ax2], label='CE loss', location='bottom')
+
+    # ----------------sub-figure-1----------------
+    axsRight = subfigs[1].subplots(2, 2, sharex=True)
+    attri_image = attri_score.reshape(image.shape)
+
+    titles = ['R channel', 'G channel', 'B channel', 'Image']
+    for i, ax in enumerate(axsRight.flatten()):
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title(titles[i])
+        if i < 3:
+            ax.imshow(attri_image[0][i].cpu().detach().numpy(),
+                      cmap='Blues',
+                      norm=plt.Normalize(vmin=attri_min, vmax=attri_max)
+                      )
+
+        else:
+            ax.imshow(image[0].cpu().detach().numpy().transpose(1, 2, 0))
+    subfigs[1].colorbar(sm2, shrink=0.6, ax=axsRight, label='Attribution Score', location='bottom')
+    subfigs[1].suptitle('Attribution score in different channel')
+
+    # subfigs[1].set_facecolor('0.85')
+    # subfigs[1].colorbar(pc, shrink=0.6, ax=axsRight)
+    # subfigs[1].suptitle('Right plots', fontsize='x-large')
+    #
+    # fig.suptitle('Figure suptitle', fontsize='xx-large')
+
+    plt.show(block=True)
+    import datetime
+    current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    fig.savefig('%s_%s.pdf' % ('attribution_effect_opt', current_time))
+    with open('./Checkpoint/plot_data.pkl', 'wb') as f:
+        pickle.dump(plot_data, f)
 
 
 def select_a_sample_to_plot(dataset, mode_name):
@@ -179,22 +244,28 @@ def select_a_sample_to_plot(dataset, mode_name):
 
     # train_loader is a class, DataSet is a list(length is 2,2 tensors) ,images is a tensor,labels is a tensor
     # images is consisted by 64 tensor, so we will get the 64 * 10 matrix. labels is a 64*1 matrix, like a vector.
-    original_images, original_labels = next(iter(test_loader))
-    original_images = original_images.to(device)
-    original_labels = original_labels.to(device)
-    _, predict = torch.max(F.softmax(model(original_images), dim=1), 1)
-    # 选择预测正确的original_images和original_labels，剔除预测不正确的original_images和original_labels
-    # predict_answer为一维向量，大小为batch_size
-    predict_answer = (original_labels == predict)
-    # torch.nonzero会返回一个二维矩阵，大小为（nozero的个数）*（1）
-    no_zero_predict_answer = torch.nonzero(predict_answer)
-    # 我们要确保 predict_correct_index 是一个一维向量,因此使用flatten,其中的元素内容为下标
-    predict_correct_index = torch.flatten(no_zero_predict_answer)
-    # print('predict_correct_index', predict_correct_index)
-    images = torch.index_select(original_images, 0, predict_correct_index)
-    labels = torch.index_select(original_labels, 0, predict_correct_index)
+    for data in test_loader:
+        original_images, original_labels = data
+        original_images = original_images.to(device)
+        original_labels = original_labels.to(device)
+        _, predict = torch.max(F.softmax(model(original_images), dim=1), 1)
+        # 选择预测正确的original_images和original_labels，剔除预测不正确的original_images和original_labels
+        # predict_answer为一维向量，大小为batch_size
+        predict_answer = (original_labels == predict)
+        # torch.nonzero会返回一个二维矩阵，大小为（nozero的个数）*（1）
+        no_zero_predict_answer = torch.nonzero(predict_answer)
+        # 我们要确保 predict_correct_index 是一个一维向量,因此使用flatten,其中的元素内容为下标
+        predict_correct_index = torch.flatten(no_zero_predict_answer)
+        # print('predict_correct_index', predict_correct_index)
+        images = torch.index_select(original_images, 0, predict_correct_index)
+        labels = torch.index_select(original_labels, 0, predict_correct_index)
+        if images.shape[0] > 0:
+            print('correct prediction')
+            plot_loss_3d(images, labels, model)
+            break
+        else:
+            print('wrong prediction')
 
-    plot_loss_3d(original_images, original_labels, model)
     # plot_loss_3d(images, labels, model)
     # pca_contour_3d(sample_a, sample_b, labels, model, many_adv_images_list)
 
@@ -214,16 +285,24 @@ if __name__ == '__main__':
     # mpl.rcParams['figure.constrained_layout.use'] = True
 
     model_name_set = ['VGG16', 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121']
-
-
+    #
     # select_a_sample_to_plot('MNIST',
     #                         'ResNet18_ImageNet',
     #                         Epsilon=5 / 255,
     #                         Iterations=10,
     #                         Momentum=1.0)
 
-    # select_a_sample_to_plot('MNIST',
-    #                         'FC_256_128')
+    select_a_sample_to_plot(
+        'CIFAR10',
+        'Res20_CIFAR10'
+    )
+
+    # select_a_sample_to_plot(
+    #     'ImageNet',
+    #     'ResNet34_ImageNet'
+    # )
+
+
     def example_plot(ax, fontsize=12, hide_labels=False):
         pc = ax.pcolormesh(np.random.randn(30, 30), vmin=-2.5, vmax=2.5)
         if not hide_labels:
@@ -233,37 +312,29 @@ if __name__ == '__main__':
         return pc
 
 
-    fig = plt.figure(layout='constrained', figsize=(10, 4))
-    subfigs = fig.subfigures(1, 2, wspace=0.07, width_ratios=[2, 1])
+    def add_right_cax(ax, pad, width):
+        '''
+        在一个ax右边追加与之等高的cax.
+        pad是cax与ax的间距.
+        width是cax的宽度.
+        '''
+        axpos = ax.get_position()
+        caxpos = mpl.transforms.Bbox.from_extents(
+            axpos.x1 + pad,
+            axpos.y0,
+            axpos.x1 + pad + width,
+            axpos.y1
+        )
+        cax = ax.figure.add_axes(caxpos)
 
-    # -------------------sub-figure-1
+        return cax
+
+
+    print("----ALL WORK HAVE BEEN DONE!!!----")
+
+'''
     # sharex 和 sharey 表示坐标轴的属性是否相同，可选的参数：True，False，row，col，默认值均为False，表示画布中的四个ax是相互独立的；
     # True 表示所有子图的x轴（或者y轴）标签是相同的，
     # row 表示每一行之间的子图的x轴（或者y轴）标签是相同的（不同行的子图的轴标签可以不同），
     # col表示每一列之间的子图的x轴（或者y轴）标签是相同的（不同列的子图的轴标签可以不同）
-    axsLeft = subfigs[0].subplots(1, 2, sharey=True)
-    subfigs[0].set_facecolor('0.75')
-    for ax in axsLeft:
-        pc = example_plot(ax)
-    subfigs[0].suptitle('Left plots', fontsize='x-large')
-    subfigs[0].colorbar(pc, shrink=0.6, ax=axsLeft, location='bottom')
-
-    # ----------------sub-figure-2
-    axsRight = subfigs[1].subplots(3, 1, sharex=True)
-    for nn, ax in enumerate(axsRight):
-        pc = example_plot(ax, hide_labels=True)
-        if nn == 2:
-            ax.set_xlabel('xlabel')
-        if nn == 1:
-            ax.set_ylabel('ylabel')
-
-    subfigs[1].set_facecolor('0.85')
-    subfigs[1].colorbar(pc, shrink=0.6, ax=axsRight)
-    subfigs[1].suptitle('Right plots', fontsize='x-large')
-
-    fig.suptitle('Figure suptitle', fontsize='xx-large')
-
-    plt.show()
-
-    print()
-    print("----ALL WORK HAVE BEEN DONE!!!----")
+'''

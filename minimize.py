@@ -90,17 +90,17 @@ def minimize(
         return _minimize_newton_exact(fun, x0, **options)
 
 
-    elif method == 'cg':
-        return _minimize_cg(fun, x0, **options)
-    elif method == 'newton-cg':
-        return _minimize_newton_cg(fun, x0, **options)
-    elif method == 'dogleg':
-        return _minimize_dogleg(fun, x0, **options)
-    elif method == 'trust-ncg':
-        return _minimize_trust_ncg(fun, x0, **options)
-    elif method == 'trust-exact':
-        return _minimize_trust_exact(fun, x0, **options)
-    elif method == 'trust-krylov':
-        return _minimize_trust_krylov(fun, x0, **options)
+    # elif method == 'cg':
+    #     return _minimize_cg(fun, x0, **options)
+    # elif method == 'newton-cg':
+    #     return _minimize_newton_cg(fun, x0, **options)
+    # elif method == 'dogleg':
+    #     return _minimize_dogleg(fun, x0, **options)
+    # elif method == 'trust-ncg':
+    #     return _minimize_trust_ncg(fun, x0, **options)
+    # elif method == 'trust-exact':
+    #     return _minimize_trust_exact(fun, x0, **options)
+    # elif method == 'trust-krylov':
+    #     return _minimize_trust_krylov(fun, x0, **options)
     else:
         raise RuntimeError('invalid method "{}" encountered.'.format(method))

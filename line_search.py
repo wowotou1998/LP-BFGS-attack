@@ -100,7 +100,7 @@ def _strong_wolfe_extra(
         # compute new trial value
         t = _cubic_interpolate(bracket[0], bracket_f[0], bracket_gtd[0],
                                bracket[1], bracket_f[1], bracket_gtd[1])
-
+        # print(' t in 101 line in line_search', t)
         # test that we are making sufficient progress:
         # in case `t` is so close to boundary, we mark that we are making
         # insufficient progress, and if
@@ -124,6 +124,7 @@ def _strong_wolfe_extra(
             insuf_progress = False
 
         # Evaluate new point
+        # print('x, t, d in line_search', x, t, d)
         f_new, g_new = obj_func(x, t, d)
         ls_func_evals += 1
         gtd_new = g_new.dot(d)
@@ -175,13 +176,16 @@ def strong_wolfe(fun, x, t, d, f, g, gtd=None, **kwargs):
     if 'extra_condition' in kwargs:
         f, g, t, ls_nevals = _strong_wolfe_extra(
             fun, x.view(-1), t, d.view(-1), f, g.view(-1), gtd, **kwargs)
+        # print('f, g, t, ls_nevals in line_search.py', f, g, t, ls_nevals)
     else:
-        # in theory we shouldn't need to use pytorch's native _strong_wolfe
+        # in the theory we shouldn't need to use pytorch's native _strong_wolfe
         # since the custom implementation above is equivalent with
         # extra_codition=None. But we will keep this in case they make any
         # changes.
         f, g, t, ls_nevals = _strong_wolfe(
             fun, x.view(-1), t, d.view(-1), f, g.view(-1), gtd, **kwargs)
+        # if torch.any(torch.isnan(t)):
+        #     t = 0
 
     # convert back to torch scalar
     f = torch.as_tensor(f, dtype=x.dtype, device=x.device)
@@ -189,12 +193,14 @@ def strong_wolfe(fun, x, t, d, f, g, gtd=None, **kwargs):
     return f, g.view_as(x), t, ls_nevals
 
 
-def brent(fun, x, d, bounds=(0,10)):
+def brent(fun, x, d, bounds=(0, 10)):
     """
     Expects `fun` to take arguments {x} and return {f(x)}
     """
+
     def line_obj(t):
         return float(fun(x + t * d))
+
     res = minimize_scalar(line_obj, bounds=bounds, method='bounded')
     return res.x
 
@@ -214,7 +220,7 @@ def backtracking(fun, x, t, d, f, g, mu=0.1, decay=0.98, max_ls=500, tmin=1e-5):
     success = False
     for i in range(max_ls):
         f_new, x_new = fun(x, t, d)
-        if f_new <= f + mu * g.mul(x_new-x).sum():
+        if f_new <= f + mu * g.mul(x_new - x).sum():
             success = True
             break
         if t <= tmin:
@@ -226,6 +232,7 @@ def backtracking(fun, x, t, d, f, g, mu=0.1, decay=0.98, max_ls=500, tmin=1e-5):
 
     return x_new, f_new, t, success
 
-if __name__=="__main__":
-    f = lambda x: x+1
-    _strong_wolfe(f,1.0,1.0,1.0,1.0,1.0,1.0)
+
+if __name__ == "__main__":
+    f = lambda x: x + 1
+    _strong_wolfe(f, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)

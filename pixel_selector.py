@@ -37,6 +37,7 @@ def pixel_attribution_sort(model, images, labels, pixel_k, FIND_MAX=True):
     if images.shape[0] > 1:
         raise Exception('the batch size of images must be 1')
     if k > n:
+        print('pixel_k: ', pixel_k, 'images.numel() ', n)
         raise Exception('the pixel_k is more than the number of pixels in images')
     baseline = torch.zeros_like(images)
     ig = IntegratedGradients(model)

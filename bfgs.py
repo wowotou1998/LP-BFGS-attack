@@ -129,7 +129,7 @@ def _minimize_bfgs_core(
     max_iter : int, optional
         Maximum number of iterations to perform. Defaults to 200 * x0.numel()
     line_search : str
-        Line search specifier. Currently the available options are
+        Line search specifier. Currently, the available options are
         {'none', 'strong_wolfe'}.
     gtol : float
         Termination tolerance on 1st-order optimality (gradient norm).
@@ -219,8 +219,9 @@ def _minimize_bfgs_core(
         elif line_search == 'strong-wolfe':
             #  Determine step size via strong-wolfe line search
             f_new, g_new, t, ls_evals = \
-                strong_wolfe(dir_evaluate, x, t, d, f, g, gtd)
+                strong_wolfe(dir_evaluate, x, t, d, f, g, gtd, extra_condition=None)
             x_new = x + d.mul(t)
+            # print('f_new, g_new, t, ls_evals in bfgs.py ', f_new, g_new, t, ls_evals)
         else:
             raise ValueError('invalid line_search option {}.'.format(line_search))
 
@@ -314,7 +315,7 @@ def _minimize_bfgs(
         Maximum number of iterations to perform. Defaults to
         ``200 * x0.numel()``.
     line_search : str
-        Line search specifier. Currently the available options are
+        Line search specifier. Currently, the available options are
         {'none', 'strong_wolfe'}.
     gtol : float
         Termination tolerance on 1st-order optimality (gradient norm).
