@@ -179,7 +179,7 @@ def plot_loss_3d(image, label, model):
     # Z = obtain_label_matrix(X, Y, sample_a, sample_b, label, model)
 
     # -------------------------绘制曲面-----------------
-    fig = plt.figure(layout='constrained', figsize=(10, 4))
+    fig = plt.figure(layout='constrained', figsize=(9 * 0.9, 4 * 0.9))
     subfigs = fig.subfigures(1, 2, width_ratios=[2, 1])
     subfigs[0].suptitle('Loss surface in different space')
 
@@ -238,9 +238,9 @@ def plot_loss_3d(image, label, model):
         h, w = x1_x2[i][2].item(), x1_x2[i][3].item()
         axsRight[channel].plot(w, h, 's', markerfacecolor='none', markersize=3,
                                color='r', alpha=0.6)
-        axsRight[channel].text(w+1, h+1, r'$x_{%d}$' % i,
+        axsRight[channel].text(w + 1, h + 1, r'$x_{%d}$' % (i + 1),
                                family='Times New Roman',  # 标注文本字体
-                               # fontsize=18,  # 文本大小
+                               fontsize=14,  # 文本大小
                                # fontweight='bold',  # 字体粗细
                                color='r'  # 文本颜色
                                )
@@ -258,9 +258,9 @@ def plot_loss_3d(image, label, model):
         h, w = x3_x4[i][2].item(), x3_x4[i][3].item()
         axsRight[channel].plot(w, h, 's', markerfacecolor='none', markersize=3,
                                color='b', alpha=0.6)
-        axsRight[channel].text(w+1, h+1, r'$x_{%d}$' % i,
+        axsRight[channel].text(w + 1, h + 1, r'$x_{%d}$' % (i + 3),
                                family='Times New Roman',  # 标注文本字体
-                               # fontsize=18,  # 文本大小
+                               fontsize=14,  # 文本大小
                                # fontweight='bold',  # 字体粗细
                                color='b'  # 文本颜色
                                )
@@ -283,7 +283,7 @@ def plot_loss_3d(image, label, model):
     plt.show(block=True)
     import datetime
     current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    fig.savefig('%s_%s.pdf' % ('attribution_effect_opt', current_time))
+    # fig.savefig('%s_%s.pdf' % ('attribution_effect_opt', current_time))
     with open('./Checkpoint/plot_data_50_50.pkl', 'wb') as f:
         pickle.dump(plot_data, f)
 
