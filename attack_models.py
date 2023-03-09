@@ -177,26 +177,30 @@ def load_dataset(dataset, batch_size, is_shuffle=False, pin=True):
     if dataset == 'MNIST':
         test_dataset = datasets.MNIST(root='./DataSet/MNIST', train=False, transform=data_tf, download=True)
         test_dataset_size = 10000
+        num_classes = 10
 
     elif dataset == 'ImageNet':
         test_dataset = datasets.ImageNet(root='./DataSet/ImageNet', split='val', transform=data_tf_imagenet)
         test_dataset_size = 50000
+        num_classes = 1000
 
     elif dataset == 'CIFAR10':
         test_dataset = datasets.CIFAR10(root='./DataSet/CIFAR10', train=False, transform=data_tf, download=True)
         test_dataset_size = 10000
+        num_classes = 10
 
     elif dataset == 'SVHN':
         test_dataset = datasets.SVHN(root='./DataSet/SVHN', split='test', transform=data_tf, download=True)
         test_dataset_size = 10000
+        num_classes = 10
     else:
         raise Exception('Unknown dataset')
     test_loader = DataLoaderX(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle, num_workers=2)
 
-    return test_loader, test_dataset_size
+    return test_loader, test_dataset_size, num_classes
 
 
-def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, A, KP, RP):
+def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, trade_off_c, A, KP, RP):
     if attack_name == 'limited_FGSM':
         start = time.perf_counter()
         atk = Limited_FGSM(model, A, KP, RP, eps=eps)
@@ -219,7 +223,7 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, A, 
 
     if attack_name == 'JSMA':
         start = time.perf_counter()
-        atk = JSMA(model, num_classes=10,
+        atk = JSMA(model, num_classes,
                    theta=1., gamma=1.0 * KP.numel() / RP.numel(),
                    clip_min=0.0, clip_max=1.0,
                    )
@@ -354,7 +358,8 @@ def attack_by_k_pixels(attack_name, model, images, labels, eps, trade_off_c, A, 
     raise Exception('Unknown attack method')
 
 
-def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, trade_off_c, pixel_k, SHOW=False):
+def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_set, N, eps, trade_off_c, pixel_k,
+                     SHOW=False):
     cifar_label = {0: "airplane", 1: "car", 2: "bird", 3: "cat", 4: "deer",
                    5: "dog", 6: "frog", 7: "horse", 8: "ship", 9: "truck"}
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
@@ -431,7 +436,7 @@ def attack_one_model(model, test_loader, test_loader_size, attack_set, N, eps, t
             plot_images = images.detach().clone()
             plot_titles = ['original: ' + str(labels[0].item())]
         for idx, attack_i in enumerate(attack_set):
-            images_under_attack, time_i = attack_by_k_pixels(attack_i, model, images, labels, eps,
+            images_under_attack, time_i = attack_by_k_pixels(attack_i, model, images, num_classes, labels, eps,
                                                              trade_off_c, A, KP, RP)
             b = images_under_attack.shape[0]
             time_i = torch.as_tensor([time_i] * b, device=device).view(b, -1)
@@ -574,7 +579,7 @@ def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_set, b
                  'noise_norm_inf', 'time(ms)']]
 
     for set_i, dataset_i in enumerate(dataset):
-        test_loader, test_dataset_size = load_dataset(dataset_i, batch_size, is_shuffle=True)
+        test_loader, test_dataset_size, num_classes = load_dataset(dataset_i, batch_size, is_shuffle=True)
         for mode_name in model_name_set[set_i]:
             model, model_acc = load_model_args(mode_name)
             for eps_i in eps_set:
@@ -584,6 +589,7 @@ def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_set, b
                         model=model,
                         test_loader=test_loader,
                         test_loader_size=test_dataset_size,
+                        num_classes=num_classes,
                         attack_set=attack_set,
                         N=attack_N,
                         eps=eps_i,
@@ -606,7 +612,7 @@ def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_set, b
             pickle.dump(res_data, f)
         import pandas as pd
         csv = pd.DataFrame(columns=res_data[0], data=res_data[1:])
-        # csv.to_csv('./Checkpoint/%s_%s_%s.csv' % (job_name, dataset_i, current_time))
+        csv.to_csv('./Checkpoint/%s_%s_%s.csv' % (job_name, dataset_i, current_time))
         print(csv)
 
     # with open('%s.pkl' % ('pkl'), 'rb') as f:
@@ -656,71 +662,40 @@ if __name__ == '__main__':
     cifar10_model_name_set = ['Res20_CIFAR10', ]  # 'VGG19', 'ResNet34', 'ResNet101', 'DenseNet121'
     svhn_model_name_set = ['Res20_SVHN']
     # imagenet_model_name_set = ['ResNet18_ImageNet']
-    imagenet_model_name_set = ['VGG19_ImageNet', 'ResNet34_ImageNet', ]
+    imagenet_model_name_set = [
+        # 'VGG19_ImageNet',
+        'ResNet34_ImageNet',
+    ]
     # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
 
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
     # job_name = 'mni_cifar_iter200_%d_100acc_20pixel_1e3' % attack_N
-    job_name = 'ce_iter200_%d_100acc_20pixel_1e3' % attack_N
+    job_name = 'imagenet_iter200_%d_100acc_20pixel_1e3' % attack_N
     from torch import autograd
 
     # with autograd.detect_anomaly():
     attack_many_model(job_name,
-                          [
-                              'MNIST',
-                              # 'CIFAR10',
-                              # 'ImageNet'
-                          ],
-
-                          [
-                              mnist_model_name_set,
-                              # cifar10_model_name_set,
-                              # imagenet_model_name_set
-                          ],
-
-                          attack_N=1000,
-                          attack_set=[
-                              # 'limited_BFGS_CW',
-                              'limited_BFGS_CE',
-                              # 'limited_BFGS_CW_LOG',
-                              # 'limited_FGSM',
-                              # 'limited_CW',
-                              # 'SparseFool',
-                              # 'JSMA'
-                          ],
-                          batch_size=1,
-                          eps_set=[1.0],
-                          trade_off_c=1e3,
-                          # pixel_k_set=[40]
-                          pixel_k_set=[
-                              # 20,
-                              40,
-                              60, 80, 100
-                          ]
-                          )
-
-    attack_many_model(job_name,
                       [
                           # 'MNIST',
-                          'CIFAR10',
-                          # 'ImageNet'
+                          # 'CIFAR10',
+                          'ImageNet'
                       ],
 
                       [
                           # mnist_model_name_set,
-                          cifar10_model_name_set,
-                          # imagenet_model_name_set
+                          # cifar10_model_name_set,
+                          imagenet_model_name_set
                       ],
 
-                      attack_N=1000,
+                      attack_N=100,
                       attack_set=[
                           # 'limited_BFGS_CW',
-                          'limited_BFGS_CE',
+                          # 'limited_BFGS_CE',
                           # 'limited_BFGS_CW_LOG',
                           # 'limited_FGSM',
                           # 'limited_CW',
-                          # 'SparseFool',
+                          'SparseFool',
                           # 'JSMA'
                       ],
                       batch_size=1,
@@ -729,10 +704,45 @@ if __name__ == '__main__':
                       # pixel_k_set=[40]
                       pixel_k_set=[
                           # 20,
-                          # 40, 60, 80,
-                          100
+                          # 40,
+                          # 60, 80,
+                          200
                       ]
                       )
+
+    # attack_many_model(job_name,
+    #                   [
+    #                       # 'MNIST',
+    #                       'CIFAR10',
+    #                       # 'ImageNet'
+    #                   ],
+    #
+    #                   [
+    #                       # mnist_model_name_set,
+    #                       cifar10_model_name_set,
+    #                       # imagenet_model_name_set
+    #                   ],
+    #
+    #                   attack_N=1000,
+    #                   attack_set=[
+    #                       # 'limited_BFGS_CW',
+    #                       'limited_BFGS_CE',
+    #                       # 'limited_BFGS_CW_LOG',
+    #                       # 'limited_FGSM',
+    #                       # 'limited_CW',
+    #                       # 'SparseFool',
+    #                       # 'JSMA'
+    #                   ],
+    #                   batch_size=1,
+    #                   eps_set=[1.0],
+    #                   trade_off_c=1e3,
+    #                   # pixel_k_set=[40]
+    #                   pixel_k_set=[
+    #                       # 20,
+    #                       # 40, 60, 80,
+    #                       100
+    #                   ]
+    #                   )
 
     # job_name = 'imagenet_%d_100acc_20pixel_1e3' % attack_N
     # attack_many_model(job_name,
