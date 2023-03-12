@@ -86,6 +86,7 @@ class JSMA(Attack):
 
     def _sum_pair(self, grads, dim_x):
         # 通过广播机制，构建大小为 [dim_x,dim_x] 的矩阵，矩阵第(i,j)号元素的内容为某个类别对像素i的偏导 grad_i 与 对像素j的偏导grad_j相加之后的结果
+        grads = grads.half()
         return grads.view(-1, dim_x, 1) + grads.view(-1, 1, dim_x)
 
     def _and_pair(self, condition, dim_x):

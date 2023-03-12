@@ -30,7 +30,7 @@ def box2inf(x):
     return torch.atanh(2.0 * x - 1.)
 
 
-def pixel_attribution_sort(model, images, labels, pixel_k, FIND_MAX=True):
+def pixel_attribution_sort(model, images, labels, pixel_k, FIND_MAX=True, attri_method='IG'):
     # Only output the
     n = images.numel()
     k = pixel_k
@@ -39,12 +39,24 @@ def pixel_attribution_sort(model, images, labels, pixel_k, FIND_MAX=True):
     if k > n:
         print('pixel_k: ', pixel_k, 'images.numel() ', n)
         raise Exception('the pixel_k is more than the number of pixels in images')
+
+    model.zero_grad()
     baseline = torch.zeros_like(images)
-    ig = IntegratedGradients(model)
-    # attributions 表明每一个贡献点对最终决策（正确的标签）的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
-    attributions, delta = ig.attribute(images.detach().clone(), baseline,
-                                       target=labels[0].item(),
-                                       return_convergence_delta=True)
+    if attri_method == 'IG':
+        ig = IntegratedGradients(model)
+        # attributions 表明每一个贡献点对最终决策（正确的标签）的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
+        attributions = ig.attribute(images.detach().clone(), baseline,
+                                    target=labels[0].item())
+    elif attri_method == 'DeepLIFT':
+        dl = DeepLift(model)
+        # attributions 表明每一个贡献点对最终决策（正确的标签）的重要性，正值代表正贡献， 负值代表负贡献，绝对值越大则像素点的值对最终决策的印象程度越高
+        attributions = dl.attribute(images.detach().clone(), baseline,
+                                    target=labels[0].item())
+    elif attri_method == 'Random':
+        attributions = torch.rand(images.shape).to(images.deviceb)
+
+    else:
+        raise Exception('Unknown attribution method')
 
     attributions_abs = torch.abs(attributions)
     attributions_abs_flat = attributions_abs.flatten()
@@ -79,7 +91,7 @@ def pixel_saliency_sort(model, images, labels, pixel_k, num_class=10):
     return idx, attributions_abs
 
 
-def pixel_selector_by_attribution(model, images, labels, pixel_k):
+def pixel_selector_by_attribution(model, images, labels, pixel_k, attri_method):
     """
     Inputs
         model,
@@ -106,7 +118,7 @@ def pixel_selector_by_attribution(model, images, labels, pixel_k):
     A = torch.zeros(size=(n, k), device=images.device, dtype=torch.float)
     # KP = torch.zeros(k, device=images.device, dtype=torch.float)
     # 找到矩阵A, 满足 image = A*KP+RP, A:n*k; KP:k*1; C:n*1
-    idx, attributions_abs = pixel_attribution_sort(model, images, labels, pixel_k)
+    idx, attributions_abs = pixel_attribution_sort(model, images, labels, pixel_k, attri_method)
     # idx, attributions_abs = pixel_saliency_sort(model, images, labels, pixel_k, num_class=10)
 
     KP = images.detach().clone().flatten()[idx].view(-1, 1)

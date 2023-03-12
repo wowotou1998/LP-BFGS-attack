@@ -175,7 +175,8 @@ def plot_loss_3d(image, label, model):
     attri_norm = plt.Normalize(vmin=attri_min, vmax=attri_max)
 
     sm = plt.cm.ScalarMappable(cmap=cm.coolwarm, norm=y_norm)
-    sm2 = plt.cm.ScalarMappable(cmap=cm.Blues, norm=attri_norm)
+    attri_color = cm.Greens
+    sm2 = plt.cm.ScalarMappable(cmap=attri_color, norm=attri_norm)
     # Z = obtain_label_matrix(X, Y, sample_a, sample_b, label, model)
 
     # -------------------------绘制曲面-----------------
@@ -218,7 +219,7 @@ def plot_loss_3d(image, label, model):
         ax.set_title(titles[i])
         if i < 3:
             ax.imshow(attri_image[0][i].cpu().detach().numpy(),
-                      cmap=cm.Greens,
+                      cmap=attri_color,
                       norm=attri_norm
                       )
 
