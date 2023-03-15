@@ -732,7 +732,7 @@ if __name__ == '__main__':
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
     # job_name = 'mni_cifar_iter200_%d_100acc_20pixel_1e3' % attack_N
-    job_name = 'random2_iter200_%d_100acc_20pixel_1e3' % attack_N
+    job_name = 'cifar_time_iter200_%d_100acc_20pixel_1e3' % attack_N
     from torch import autograd
 
     # with autograd.detect_anomaly():
@@ -752,31 +752,35 @@ if __name__ == '__main__':
 
                       attack_N=1000,
                       attack_set=[
-                          'limited_BFGS_CW',
-                          'limited_BFGS_CE',
-                          'limited_BFGS_CW_LOG',
-                          'limited_FGSM',
-                          'limited_CW',
+                          # 'limited_BFGS_CW',
+                          # 'limited_BFGS_CE',
+                          # 'limited_BFGS_CW_LOG',
+                          # 'limited_FGSM',
+                          # 'limited_CW',
                           # 'SparseFool',
-                          # 'JSMA'
+                          'JSMA'
                       ],
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
                       # pixel_k_set=[40]
                       pixel_k_set=[
-                          # 20,
+                          20,
                           40,
-                          # 60,
-                          # 80,
+                          60,
+                          80,
                           100,
                           # 200,
                           # 300,
-                          400,
-                          # 700,
-                          1000
+                          # 400,
+                          # # 700,
+                          # 1000
                       ],
-                      attri_method_set=['IG', 'DeepLIFT', 'Random']
+                      attri_method_set=[
+                          'IG',
+                          # 'DeepLIFT',
+                          # 'Random',
+                      ]
                       )
     # print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 

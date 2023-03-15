@@ -30,7 +30,7 @@ def box2inf(x):
     return torch.atanh(2.0 * x - 1.)
 
 
-def pixel_attribution_sort(model, images, labels, pixel_k, FIND_MAX=True, attri_method='IG'):
+def pixel_attribution_sort(model, images, labels, pixel_k, attri_method, FIND_MAX=True, ):
     # Only output the
     n = images.numel()
     k = pixel_k
@@ -53,7 +53,8 @@ def pixel_attribution_sort(model, images, labels, pixel_k, FIND_MAX=True, attri_
         attributions = dl.attribute(images.detach().clone(), baseline,
                                     target=labels[0].item())
     elif attri_method == 'Random':
-        attributions = torch.rand(images.shape).to(images.deviceb)
+        # print('ttri_method == Random')
+        attributions = torch.rand(images.shape).to(images.device)
 
     else:
         raise Exception('Unknown attribution method')
