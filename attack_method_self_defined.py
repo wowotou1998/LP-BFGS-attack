@@ -197,7 +197,7 @@ class JSMA(Attack):
 
 
 # 这里主要定义两个基准函数 FGSM，PGD 在图像的可更改像素比较少的情况下进行对抗样本的生成的效果是怎样的
-class Limited_FGSM(Attack):
+class LP_FGSM(Attack):
     r"""
     FGSM in the paper 'Explaining and harnessing adversarial examples'
     [https://arxiv.org/abs/1412.6572]
@@ -269,7 +269,7 @@ class Limited_FGSM(Attack):
         return adv_images
 
 
-class Limited_CW3(Attack):
+class LP_CW(Attack):
     r"""
     CW in the paper 'Towards Evaluating the Robustness of Neural Networks'
     [https://arxiv.org/abs/1608.04644]
@@ -423,7 +423,7 @@ class Limited_CW3(Attack):
 
 
 # deprecated
-class Limited_PGD(Attack):
+class LP_PGD(Attack):
     r"""
     PGD in the paper 'Towards Deep Learning Models Resistant to Adversarial Attacks'
     [https://arxiv.org/abs/1706.06083]

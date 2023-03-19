@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from minimize import minimize
 from pixel_selector import inf2box, box2inf
 from pixel_selector import pixel_selector_by_attribution
-from attack_method_self_defined import Limited_FGSM, Limited_PGD, Limited_CW3, JSMA
+from attack_method_self_defined import LP_FGSM, LP_PGD, LP_CW, JSMA
 from torchattacks import SparseFool
 from prefetch_generator import BackgroundGenerator
 # from advertorch.attacks import JSMA
@@ -224,8 +224,8 @@ def torch_time_ticker(func):
 
 
 def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, trade_off_c, A, KP, RP):
-    if attack_name == 'limited_FGSM':
-        atk = Limited_FGSM(model, A, KP, RP, eps=eps)
+    if attack_name == 'FGSM':
+        atk = LP_FGSM(model, A, KP, RP, eps=eps)
 
         torch.cuda.synchronize()
         start = time.perf_counter()
@@ -235,8 +235,8 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
 
         return adv_images, end - start
 
-    if attack_name == 'limited_PGD':
-        atk = Limited_PGD(model, A, KP, RP, eps=eps, alpha=(1.5 * eps) / 200, steps=200)
+    if attack_name == 'LP-PGD':
+        atk = LP_PGD(model, A, KP, RP, eps=eps, alpha=(1.5 * eps) / 200, steps=200)
         torch.cuda.synchronize()
         start = time.perf_counter()
         adv_images = atk(images, labels)
@@ -269,8 +269,8 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
 
         return adv_images, end - start
 
-    if attack_name == 'limited_CW':
-        atk = Limited_CW3(model, A, KP, RP, c=trade_off_c, steps=200)
+    if attack_name == 'CW':
+        atk = LP_CW(model, A, KP, RP, c=trade_off_c, steps=200)
         # atk = torchattacks.CW(model, c=1)
         torch.cuda.synchronize()
         start = time.perf_counter()
@@ -365,7 +365,7 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
             cost = L2_loss + c * out1
             return cost
 
-        if attack_name == 'limited_BFGS_CW':
+        if attack_name == 'LP-BFGS+CW':
             torch.cuda.synchronize()
             start = time.perf_counter()
 
@@ -385,7 +385,7 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
             end = time.perf_counter()
 
             return adv_images, end - start
-        elif attack_name == 'limited_BFGS_CW_LOG':
+        elif attack_name == 'LP-BFGS+CW LOG':
             torch.cuda.synchronize()
             start = time.perf_counter()
 
@@ -397,11 +397,11 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
             end = time.perf_counter()
 
             return adv_images, end - start
-        elif attack_name == 'limited_BFGS_CE':
+        elif attack_name == 'LP-BFGS+CE':
             torch.cuda.synchronize()
             start = time.perf_counter()
 
-            res1 = minimize(ce_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-4, disp=False)
+            res1 = minimize(ce_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
             KP_box = inf2box(res1.x)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -417,7 +417,7 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
 
 def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_set, N, eps, trade_off_c, pixel_k,
                      attri_method,
-                     SHOW=False):
+                     SHOW=True):
     cifar_label = {0: "airplane", 1: "car", 2: "bird", 3: "cat", 4: "deer",
                    5: "dog", 6: "frog", 7: "horse", 8: "ship", 9: "truck"}
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
@@ -492,7 +492,7 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
         # valid_attack_num += labels.shape[0]
         if SHOW:
             plot_images = images.detach().clone()
-            plot_titles = ['original: ' + str(labels[0].item())]
+            plot_titles = ['Original: ' + str(labels[0].item())]
         for idx, attack_i in enumerate(attack_set):
             images_under_attack, time_i = attack_by_k_pixels(attack_i, model, images, num_classes, labels, eps,
                                                              trade_off_c, A, KP, RP)
@@ -668,13 +668,13 @@ def attack_many_model(job_name, dataset, model_name_set, attack_N, attack_set, b
                                 [attri_i, dataset_i, mode_name, attack_set[i], attack_N, trade_off_c, eps_i, pixel_k,
                                  success_rate[i], confidence[i], norm0[i], norm1[i], norm2[i], norm_inf[i], time[i]])
 
-            current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-            with open('./Checkpoint/%s_%s_%s.pkl' % (job_name, dataset_i, current_time), 'wb') as f:
-                pickle.dump(res_data, f)
-            import pandas as pd
-            csv = pd.DataFrame(columns=res_data[0], data=res_data[1:])
-            csv.to_csv('./Checkpoint/%s_%s_%s.csv' % (job_name, dataset_i, current_time))
-            print(csv)
+            # current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+            # with open('./Checkpoint/%s_%s_%s.pkl' % (job_name, dataset_i, current_time), 'wb') as f:
+            #     pickle.dump(res_data, f)
+            # import pandas as pd
+            # csv = pd.DataFrame(columns=res_data[0], data=res_data[1:])
+            # csv.to_csv('./Checkpoint/%s_%s_%s.csv' % (job_name, dataset_i, current_time))
+            # print(csv)
 
     # with open('%s.pkl' % ('pkl'), 'rb') as f:
     #     basic_info = pickle.load(f)
@@ -691,7 +691,7 @@ if __name__ == '__main__':
 
     # matplotlib.use('agg')
     # matplotlib.get_backend()
-    # mpl.rcParams['font.sans-serif'] = ['Times New Roman']
+    mpl.rcParams['font.sans-serif'] = ['Times New Roman']
     # mpl.rcParams['font.sans-serif'] = ['Arial']
     # mpl.rcParams['backend'] = 'agg'
     # mpl.rcParams["font.size"] = 12
@@ -732,7 +732,7 @@ if __name__ == '__main__':
     # job_name = 'cifar_%d_diff_loss_20pixel_1e3' % attack_N
 
     # job_name = 'mni_cifar_iter200_%d_100acc_20pixel_1e3' % attack_N
-    job_name = 'cifar_time_iter200_%d_100acc_20pixel_1e3' % attack_N
+    job_name = 'sf_imgnet_time_iter200_%d_100acc_20pixel_1e3' % attack_N
     from torch import autograd
 
     # with autograd.detect_anomaly():
@@ -750,14 +750,14 @@ if __name__ == '__main__':
                           # imagenet_model_name_set
                       ],
 
-                      attack_N=1000,
+                      attack_N=16,
                       attack_set=[
-                          # 'limited_BFGS_CW',
-                          # 'limited_BFGS_CE',
-                          # 'limited_BFGS_CW_LOG',
-                          # 'limited_FGSM',
-                          # 'limited_CW',
-                          # 'SparseFool',
+                          'LP-BFGS+CW',
+                          'LP-BFGS+CE',
+                          'LP-BFGS+CW LOG',
+                          'FGSM',
+                          'CW',
+                          'SparseFool',
                           'JSMA'
                       ],
                       batch_size=1,
@@ -765,11 +765,12 @@ if __name__ == '__main__':
                       trade_off_c=1e3,
                       # pixel_k_set=[40]
                       pixel_k_set=[
-                          20,
-                          40,
-                          60,
-                          80,
-                          100,
+                          25,
+                          # 20,
+                          # 40,
+                          # 60,
+                          # 80,
+                          # 100,
                           # 200,
                           # 300,
                           # 400,
@@ -782,6 +783,52 @@ if __name__ == '__main__':
                           # 'Random',
                       ]
                       )
+
+    # attack_many_model(job_name,
+    #                   [
+    #                       # 'MNIST',
+    #                       # 'CIFAR10',
+    #                       'ImageNet'
+    #                   ],
+    #
+    #                   [
+    #                       # mnist_model_name_set,
+    #                       # cifar10_model_name_set,
+    #                       imagenet_model_name_set
+    #                   ],
+    #
+    #                   attack_N=100,
+    #                   attack_set=[
+    #                       # 'LP-BFGS+CW',
+    #                       # 'LP-BFGS+CE',
+    #                       # 'LP-BFGS+CW LOG',
+    #                       # 'FGSM',
+    #                       # 'CW',
+    #                       'SparseFool',
+    #                       # 'JSMA'
+    #                   ],
+    #                   batch_size=1,
+    #                   eps_set=[1.0],
+    #                   trade_off_c=1e3,
+    #                   # pixel_k_set=[40]
+    #                   pixel_k_set=[
+    #                       # 20,
+    #                       # 40,
+    #                       # 60,
+    #                       # 80,
+    #                       # 100,
+    #                       # 200,
+    #                       # 300,
+    #                       400,
+    #                       # # 700,
+    #                       # 1000
+    #                   ],
+    #                   attri_method_set=[
+    #                       'IG',
+    #                       # 'DeepLIFT',
+    #                       # 'Random',
+    #                   ]
+    #                   )
     # print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
     # attack_many_model(job_name,
@@ -799,11 +846,11 @@ if __name__ == '__main__':
     #
     #                   attack_N=1000,
     #                   attack_set=[
-    #                       # 'limited_BFGS_CW',
-    #                       'limited_BFGS_CE',
-    #                       # 'limited_BFGS_CW_LOG',
-    #                       # 'limited_FGSM',
-    #                       # 'limited_CW',
+    #                       # 'LP-BFGS+CW',
+    #                       'LP-BFGS+CE',
+    #                       # 'LP-BFGS+CW LOG',
+    #                       # 'FGSM',
+    #                       # 'CW',
     #                       # 'SparseFool',
     #                       # 'JSMA'
     #                   ],
@@ -825,11 +872,11 @@ if __name__ == '__main__':
     #                   [imagenet_model_name_set],
     #                   attack_N=1000,
     #                   attack_set=[
-    #                       'limited_BFGS_CW',
-    #                       'limited_BFGS_CE',
-    #                       'limited_BFGS_CW_LOG',
-    #                       'limited_FGSM',
-    #                       'limited_CW',
+    #                       'LP-BFGS+CW',
+    #                       'LP-BFGS+CE',
+    #                       'LP-BFGS+CW LOG',
+    #                       'FGSM',
+    #                       'CW',
     #                       # 'SparseFool'
     #                   ],
     #                   batch_size=1,
