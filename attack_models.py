@@ -740,37 +740,37 @@ if __name__ == '__main__':
     attack_many_model(job_name,
                       [
                           # 'MNIST',
-                          'CIFAR10',
-                          # 'ImageNet'
+                          # 'CIFAR10',
+                          'ImageNet'
                       ],
 
                       [
                           # mnist_model_name_set,
-                          cifar10_model_name_set,
-                          # imagenet_model_name_set
+                          # cifar10_model_name_set,
+                          imagenet_model_name_set
                       ],
 
                       attack_N=16,
                       attack_set=[
-                          'LP-BFGS+CW',
-                          'LP-BFGS+CE',
-                          'LP-BFGS+CW LOG',
-                          'FGSM',
-                          'CW',
+                          # 'LP-BFGS+CW',
+                          # 'LP-BFGS+CE',
+                          # 'LP-BFGS+CW LOG',
+                          # 'FGSM',
+                          # 'CW',
                           'SparseFool',
-                          'JSMA'
+                          # 'JSMA'
                       ],
                       batch_size=1,
                       eps_set=[1.0],
                       trade_off_c=1e3,
                       # pixel_k_set=[40]
                       pixel_k_set=[
-                          25,
+                          # 25,
                           # 20,
                           # 40,
                           # 60,
                           # 80,
-                          # 100,
+                          100,
                           # 200,
                           # 300,
                           # 400,
