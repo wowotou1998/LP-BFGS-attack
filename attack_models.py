@@ -637,155 +637,157 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
                     noise_norm_inf_ave[i]))
         return attack_success_rate, time_ave, confidence_ave, noise_norm0_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
 
-    def attack_many_model(args):
-        import datetime
-        # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-        res_data = [
-            ['attri_method_set', 'dataset', 'mode_name', 'attack_method', 'attack_num', 'constant c', 'eps_i',
-             'pixel_k|lambda',
-             'attack_success', 'confidence', 'noise_norm0', 'noise_norm1', 'noise_norm2',
-             'noise_norm_inf', 'time(ms)']]
-        for attri_i in args.attri_method_set:
-            test_loader, test_dataset_size, num_classes = load_dataset(args.dataset, args.batch_size, is_shuffle=True)
-            for mode_name in args.model_name_set:
-                model, model_acc = load_model_args(mode_name)
-                for eps_i in args.eps_set:
-                    assert len(args.pixel_k_set) == len(args.lambda_set)
-                    for pixel_k, lambda_i in zip(args.pixel_k_set, args.lambda_set):
-                        success_rate_list, time_list, confidence_list, noise_norm0_list, noise_norm1_list, noise_norm2_list, noise_norm_inf_list \
-                            = attack_one_model(
-                            model=model,
-                            test_loader=test_loader,
-                            test_loader_size=test_dataset_size,
-                            num_classes=num_classes,
-                            attack_set=args.attack_set,
-                            N=args.attack_N,
-                            eps=eps_i,
-                            trade_off_c=args.trade_off_c,
-                            pixel_k=pixel_k,
-                            lambda_i=lambda_i,
-                            attri_method=attri_i
-                        )
-                        success_rate, time, confidence, norm0, norm1, norm2, norm_inf = success_rate_list.cpu().numpy().tolist(), \
-                            time_list.cpu().numpy().tolist(), \
-                            confidence_list.cpu().numpy().tolist(), \
-                            noise_norm0_list.cpu().numpy().tolist(), \
-                            noise_norm1_list.cpu().numpy().tolist(), \
-                            noise_norm2_list.cpu().numpy().tolist(), \
-                            noise_norm_inf_list.cpu().numpy().tolist()
-                        for i in range(len(success_rate_list)):
-                            res_data.append(
-                                [attri_i, args.dataset, mode_name, args.attack_set[i], args.attack_N, args.trade_off_c,
-                                 eps_i, "%d|%.2f" % (pixel_k, lambda_i),
-                                 success_rate[i], confidence[i], norm0[i], norm1[i], norm2[i], norm_inf[i], time[i]])
 
-            current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-            job_name = '%s_%s_iter200_trad_c%s' % (args.dataset, args.attack_N, args.trade_off_c)
-            with open('./Checkpoint/%s_%s.pkl' % (job_name, current_time), 'wb') as f:
-                pickle.dump(res_data, f)
-            import pandas as pd
-            csv = pd.DataFrame(columns=res_data[0], data=res_data[1:])
-            csv.to_csv('./Checkpoint/%s_%s.csv' % (job_name, current_time))
-            print(csv)
+def attack_many_model(args):
+    import datetime
+    # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    res_data = [
+        ['attri_method_set', 'dataset', 'mode_name', 'attack_method', 'attack_num', 'constant c', 'eps_i',
+         'pixel_k|lambda',
+         'attack_success', 'confidence', 'noise_norm0', 'noise_norm1', 'noise_norm2',
+         'noise_norm_inf', 'time(ms)']]
+    for attri_i in args.attri_method_set:
+        test_loader, test_dataset_size, num_classes = load_dataset(args.dataset, args.batch_size, is_shuffle=True)
+        for mode_name in args.model_name_set:
+            model, model_acc = load_model_args(mode_name)
+            for eps_i in args.eps_set:
+                assert len(args.pixel_k_set) == len(args.lambda_set)
+                for pixel_k, lambda_i in zip(args.pixel_k_set, args.lambda_set):
+                    success_rate_list, time_list, confidence_list, noise_norm0_list, noise_norm1_list, noise_norm2_list, noise_norm_inf_list \
+                        = attack_one_model(
+                        model=model,
+                        test_loader=test_loader,
+                        test_loader_size=test_dataset_size,
+                        num_classes=num_classes,
+                        attack_set=args.attack_set,
+                        N=args.attack_N,
+                        eps=eps_i,
+                        trade_off_c=args.trade_off_c,
+                        pixel_k=pixel_k,
+                        lambda_i=lambda_i,
+                        attri_method=attri_i
+                    )
+                    success_rate, time, confidence, norm0, norm1, norm2, norm_inf = success_rate_list.cpu().numpy().tolist(), \
+                        time_list.cpu().numpy().tolist(), \
+                        confidence_list.cpu().numpy().tolist(), \
+                        noise_norm0_list.cpu().numpy().tolist(), \
+                        noise_norm1_list.cpu().numpy().tolist(), \
+                        noise_norm2_list.cpu().numpy().tolist(), \
+                        noise_norm_inf_list.cpu().numpy().tolist()
+                    for i in range(len(success_rate_list)):
+                        res_data.append(
+                            [attri_i, args.dataset, mode_name, args.attack_set[i], args.attack_N, args.trade_off_c,
+                             eps_i, "%d|%.2f" % (pixel_k, lambda_i),
+                             success_rate[i], confidence[i], norm0[i], norm1[i], norm2[i], norm_inf[i], time[i]])
 
-        # with open('%s.pkl' % ('pkl'), 'rb') as f:
-        #     basic_info = pickle.load(f)
+        current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        job_name = '%s_%s_iter200_trad_c%s' % (args.dataset, args.attack_N, args.trade_off_c)
+        with open('./Checkpoint/%s_%s.pkl' % (job_name, current_time), 'wb') as f:
+            pickle.dump(res_data, f)
+        import pandas as pd
+        csv = pd.DataFrame(columns=res_data[0], data=res_data[1:])
+        csv.to_csv('./Checkpoint/%s_%s.csv' % (job_name, current_time))
+        print(csv)
 
-    if __name__ == '__main__':
-        import os
+    # with open('%s.pkl' % ('pkl'), 'rb') as f:
+    #     basic_info = pickle.load(f)
 
-        os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-        # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-        from pylab import mpl
-        import random
+if __name__ == '__main__':
+    import os
 
-        # matplotlib.use('agg')
-        # matplotlib.get_backend()
-        mpl.rcParams['font.sans-serif'] = ['Times New Roman']
-        # mpl.rcParams['font.sans-serif'] = ['Arial']
-        # mpl.rcParams['backend'] = 'agg'
-        # mpl.rcParams["font.size"] = 12
-        mpl.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
-        # mpl.rcParams['savefig.dpi'] = 400  # 保存图片分辨率
-        mpl.rcParams['figure.constrained_layout.use'] = True
-        plt.rcParams['xtick.direction'] = 'in'  # 将x周的刻度线方向设置向内
-        plt.rcParams['ytick.direction'] = 'in'  # 将y轴的刻度方向设置向内
+    os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-        # if torch.cuda.is_available():
-        #     torch.backends.cudnn.benchmark = True
+    from pylab import mpl
+    import random
 
-        # 生成随机数，以便固定后续随机数，方便复现代码
-        random.seed(123)
-        # 没有使用GPU的时候设置的固定生成的随机数
-        np.random.seed(123)
-        # 为CPU设置种子用于生成随机数，以使得结果是确定的
-        torch.manual_seed(123)
-        # torch.cuda.manual_seed()为当前GPU设置随机种子
-        torch.cuda.manual_seed(123)
+    # matplotlib.use('agg')
+    # matplotlib.get_backend()
+    mpl.rcParams['font.sans-serif'] = ['Times New Roman']
+    # mpl.rcParams['font.sans-serif'] = ['Arial']
+    # mpl.rcParams['backend'] = 'agg'
+    # mpl.rcParams["font.size"] = 12
+    mpl.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
+    # mpl.rcParams['savefig.dpi'] = 400  # 保存图片分辨率
+    mpl.rcParams['figure.constrained_layout.use'] = True
+    plt.rcParams['xtick.direction'] = 'in'  # 将x周的刻度线方向设置向内
+    plt.rcParams['ytick.direction'] = 'in'  # 将y轴的刻度方向设置向内
 
-        # mnist_model_name_set = []
-        # 'ImageNet',
-        cifar10_model_name_set = ['NiN_CIFAR10', ]  # 'Res20_CIFAR10'
-        imagenet_model_name_set = ['ResNet34_ImageNet', ]
-        # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
-        # imagenet_model_name_set
+    # if torch.cuda.is_available():
+    #     torch.backends.cudnn.benchmark = True
 
-        import argparse
+    # 生成随机数，以便固定后续随机数，方便复现代码
+    random.seed(123)
+    # 没有使用GPU的时候设置的固定生成的随机数
+    np.random.seed(123)
+    # 为CPU设置种子用于生成随机数，以使得结果是确定的
+    torch.manual_seed(123)
+    # torch.cuda.manual_seed()为当前GPU设置随机种子
+    torch.cuda.manual_seed(123)
 
-        parser = argparse.ArgumentParser(description='attack model')
+    # mnist_model_name_set = []
+    # 'ImageNet',
+    cifar10_model_name_set = ['NiN_CIFAR10', ]  # 'Res20_CIFAR10'
+    imagenet_model_name_set = ['ResNet34_ImageNet', ]
+    # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
+    # imagenet_model_name_set
 
-        parser.add_argument('-attack_N', type=int, default=1000)
-        parser.add_argument('-dataset', type=str, default='CIFAR10')
-        parser.add_argument('-model_name_set', type=str, default=cifar10_model_name_set, nargs='+')
-        parser.add_argument('-attack_set', type=str, default=[
-            # 'LP-BFGS+CW',
-            'LP-BFGS+CE',
-            # 'LP-BFGS+CW LOG',
-            # 'FGSM',
-            # 'CW',
-            # 'SparseFool',
-            # 'JSMA'
-        ], nargs='+')
-        parser.add_argument('-lambda_set', type=float, default=[
-            1.0,
-            # 1.6, 2.4, 3.2, 4.0
-        ], nargs='+')
+    import argparse
 
-        parser.add_argument('-pixel_k_set', type=int, default=[
-            20,
-            # 40, 60, 80, 100
-            # 50,
-            # 75,
-            # 20,
-            # 40,
-            # 60,
-            # 80,
-            # 100,
-            # 150,
-            # 175,
-            # 200,
-            # 300,
-            # 400,
-            # # 700,
-            # 1000
-        ], nargs='+')
+    parser = argparse.ArgumentParser(description='attack model')
 
-        parser.add_argument('-batch_size', type=int, default=1)
-        parser.add_argument('-eps_set', type=float, default=[1.0], nargs='+')
-        parser.add_argument('-trade_off_c', type=float, default=1e3)
-        parser.add_argument('-attri_method_set', type=str, default=[
-            'IG',
-            # 'DeepLIFT',
-            # 'Random',
-        ], nargs='+')
+    parser.add_argument('-attack_N', type=int, default=1000)
+    parser.add_argument('-dataset', type=str, default='CIFAR10')
+    parser.add_argument('-model_name_set', type=str, default=cifar10_model_name_set, nargs='+')
+    parser.add_argument('-attack_set', type=str, default=[
+        # 'LP-BFGS+CW',
+        'LP-BFGS+CE',
+        # 'LP-BFGS+CW LOG',
+        # 'FGSM',
+        # 'CW',
+        # 'SparseFool',
+        # 'JSMA'
+    ], nargs='+')
+    parser.add_argument('-lambda_set', type=float, default=[
+        1.0,
+        # 1.6, 2.4, 3.2, 4.0
+    ], nargs='+')
 
-        args = parser.parse_args()
+    parser.add_argument('-pixel_k_set', type=int, default=[
+        20,
+        # 40, 60, 80, 100
+        # 50,
+        # 75,
+        # 20,
+        # 40,
+        # 60,
+        # 80,
+        # 100,
+        # 150,
+        # 175,
+        # 200,
+        # 300,
+        # 400,
+        # # 700,
+        # 1000
+    ], nargs='+')
 
-        # from torch import autograd
-        # with autograd.detect_anomaly():
-        # with torch.autograd.profiler.profile(enabled=True) as prof:
-        attack_many_model(args)
-        print('aaa')
+    parser.add_argument('-batch_size', type=int, default=1)
+    parser.add_argument('-eps_set', type=float, default=[1.0], nargs='+')
+    parser.add_argument('-trade_off_c', type=float, default=1e3)
+    parser.add_argument('-attri_method_set', type=str, default=[
+        'IG',
+        # 'DeepLIFT',
+        # 'Random',
+    ], nargs='+')
 
-        print("ALL WORK HAVE BEEN DONE!!!")
+    print('aaa')
+    args = parser.parse_args()
+
+    # from torch import autograd
+    # with autograd.detect_anomaly():
+    # with torch.autograd.profiler.profile(enabled=True) as prof:
+    attack_many_model(args)
+
+    print("ALL WORK HAVE BEEN DONE!!!")
