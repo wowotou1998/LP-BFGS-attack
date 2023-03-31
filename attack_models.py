@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from minimize import minimize
 from pixel_selector import inf2box, box2inf
 from pixel_selector import pixel_selector_by_attribution
-from attack_method_self_defined import LP_FGSM, LP_PGD, LP_CW, JSMA
+from attack_method_self_defined import LP_FGSM, LP_CW, JSMA
 from torchattacks import SparseFool
 from prefetch_generator import BackgroundGenerator
 # from advertorch.attacks import JSMA
@@ -44,6 +44,7 @@ def show_one_image(images, title):
 
 
 def show_images(images, titles, ):
+    import os
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     # plt.figure()
     print(images.shape)
@@ -55,16 +56,16 @@ def show_images(images, titles, ):
     # plt.title(title)
     # plt.show()
 
-    fig, axes = plt.subplots(1, B, figsize=(2 * B, 2))
+    fig, axes = plt.subplots(1, B, figsize=(2 * B, 2), squeeze=False)
     for i in range(B):
         image = images[i].cpu().detach().numpy().transpose(1, 2, 0)
         if C == 1:
-            axes[i].imshow(image, cmap='gray')
+            axes[0][i].imshow(image, cmap='gray')
         else:
-            axes[i].imshow(image)
-        axes[i].set_xticks([])
-        axes[i].set_yticks([])
-        axes[i].set_title(titles[i])
+            axes[0][i].imshow(image)
+        axes[0][i].set_xticks([])
+        axes[0][i].set_yticks([])
+        axes[0][i].set_title(titles[i])
     plt.show(block=True)
     # fig.savefig('pixel_selecor.pdf')
 
@@ -241,14 +242,8 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
         return adv_images, end - start
 
     if attack_name == 'LP-PGD':
-        atk = LP_PGD(model, A, KP, RP, eps=eps, alpha=(1.5 * eps) / 200, steps=200)
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        adv_images = atk(images, labels)
-        torch.cuda.synchronize()
-        end = time.perf_counter()
+        raise Exception('Unimplemented method')
 
-        return adv_images, end - start
     if attack_name == 'SparseFool':
         atk = SparseFool(model, steps=200, lam=lambda_i)
 
@@ -423,7 +418,7 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
 def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_set, N, eps, trade_off_c, pixel_k,
                      lambda_i,
                      attri_method,
-                     SHOW=False):
+                     SHOW=True):
     cifar_label = {0: "airplane", 1: "car", 2: "bird", 3: "cat", 4: "deer",
                    5: "dog", 6: "frog", 7: "horse", 8: "ship", 9: "truck"}
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
@@ -492,7 +487,8 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
 
         # pixel_idx, attribution_abs = pixel_attribution_sort(model, images, labels, pixel_k)
         # pixel_idx, attribution_abs = pixel_saliency_sort(model, images, labels, pixel_k)
-        pixel_idx, A, KP, RP = pixel_selector_by_attribution(model, images, labels, pixel_k, attri_method)
+        attribution_abs, pixel_idx, A, KP, RP = pixel_selector_by_attribution(model, images, labels, pixel_k,
+                                                                              attri_method)
         acc_num_before_attack += predict_answer.sum().item()
         # 统计神经网络分类正确的样本的个数总和
         # valid_attack_num += labels.shape[0]
@@ -506,10 +502,12 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
             time_i = torch.as_tensor([time_i] * b, device=device).view(b, -1)
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
 
-            noise = images_under_attack.detach().clone().view(images.shape[0], -1) - \
-                    images.detach().clone().view(images.shape[0], -1)
+            noise_o = images_under_attack.detach().clone().view(images.shape[0], -1) - \
+                      images.detach().clone().view(images.shape[0], -1)
             if attack_i not in ['SparseFool', 'JSMA']:
-                noise = torch.index_select(noise, 1, pixel_idx)
+                noise = torch.index_select(noise_o, 1, pixel_idx)
+            else:
+                noise = noise_o.clone().detach()
             noise_norm0 = torch.linalg.norm(noise, ord=0, dim=1)
             noise_norm1 = torch.linalg.norm(noise, ord=1, dim=1)
             noise_norm2 = torch.linalg.norm(noise, ord=2, dim=1)
@@ -603,184 +601,191 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
 
             # brea
         if SHOW:
+            # show adv images
             show_images(plot_images, plot_titles)
-        if epoch_num >= N:
-            break
-    print('attack_success_num', attack_success_num)
-    # print('confidence_total', confidence_total)
-    attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
-    # attack_success_num[attack_success_num == 0] = float('inf'), 防止出现除 0 溢出 inf
-    no_zero_index = attack_success_num != 0
-    time_ave[no_zero_index] = (time_total[no_zero_index] / attack_success_num[no_zero_index]) * 1000.
-    confidence_ave[no_zero_index] = (confidence_total[no_zero_index] / attack_success_num[no_zero_index])
-    noise_norm0_ave[no_zero_index] = (noise_norm0_total[no_zero_index] / attack_success_num[no_zero_index])
-    noise_norm1_ave[no_zero_index] = (noise_norm1_total[no_zero_index] / attack_success_num[no_zero_index])
-    noise_norm2_ave[no_zero_index] = (noise_norm2_total[no_zero_index] / attack_success_num[no_zero_index])
-    noise_norm_inf_ave[no_zero_index] = (noise_norm_inf_total[no_zero_index] / attack_success_num[no_zero_index])
-    pbar.close()
-    print('model acc %.2f' % (acc_num_before_attack / sample_num))
-    for i in range(len(attack_set)):
-        print(
-            'eps=%.2f, pixel_k=%d, lambda=%.2f, %s ASR=%.2f%%,time=%.2f(ms) confidence=%.2f, norm(0)=%.2f,norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
-                eps, pixel_k, lambda_i,
-                attack_set[i],
-                attack_success_rate[i],
-                time_ave[i],
-                confidence_ave[i],
-                noise_norm0_ave[i],
-                noise_norm1_ave[i],
-                noise_norm2_ave[i],
-                noise_norm_inf_ave[i]))
-    return attack_success_rate, time_ave, confidence_ave, noise_norm0_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
+            # show noise
+            show_images(noise_o.view(images.shape), ['noise'])
+            #     show important pixels
+            attri_visual = attribution_abs[attribution_abs == 0.] = 128
+            show_images(attri_visual, plot_titles)
+            if epoch_num >= N:
+                break
+        print('attack_success_num', attack_success_num)
+        # print('confidence_total', confidence_total)
+        attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
+        # attack_success_num[attack_success_num == 0] = float('inf'), 防止出现除 0 溢出 inf
+        no_zero_index = attack_success_num != 0
+        time_ave[no_zero_index] = (time_total[no_zero_index] / attack_success_num[no_zero_index]) * 1000.
+        confidence_ave[no_zero_index] = (confidence_total[no_zero_index] / attack_success_num[no_zero_index])
+        noise_norm0_ave[no_zero_index] = (noise_norm0_total[no_zero_index] / attack_success_num[no_zero_index])
+        noise_norm1_ave[no_zero_index] = (noise_norm1_total[no_zero_index] / attack_success_num[no_zero_index])
+        noise_norm2_ave[no_zero_index] = (noise_norm2_total[no_zero_index] / attack_success_num[no_zero_index])
+        noise_norm_inf_ave[no_zero_index] = (noise_norm_inf_total[no_zero_index] / attack_success_num[no_zero_index])
+        pbar.close()
+        print('model acc %.2f' % (acc_num_before_attack / sample_num))
+        for i in range(len(attack_set)):
+            print(
+                'eps=%.2f, pixel_k=%d, lambda=%.2f, %s ASR=%.2f%%,time=%.2f(ms) confidence=%.2f, norm(0)=%.2f,norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
+                    eps, pixel_k, lambda_i,
+                    attack_set[i],
+                    attack_success_rate[i],
+                    time_ave[i],
+                    confidence_ave[i],
+                    noise_norm0_ave[i],
+                    noise_norm1_ave[i],
+                    noise_norm2_ave[i],
+                    noise_norm_inf_ave[i]))
+        return attack_success_rate, time_ave, confidence_ave, noise_norm0_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
 
+    def attack_many_model(args):
+        import datetime
+        # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        res_data = [
+            ['attri_method_set', 'dataset', 'mode_name', 'attack_method', 'attack_num', 'constant c', 'eps_i',
+             'pixel_k|lambda',
+             'attack_success', 'confidence', 'noise_norm0', 'noise_norm1', 'noise_norm2',
+             'noise_norm_inf', 'time(ms)']]
+        for attri_i in args.attri_method_set:
+            test_loader, test_dataset_size, num_classes = load_dataset(args.dataset, args.batch_size, is_shuffle=True)
+            for mode_name in args.model_name_set:
+                model, model_acc = load_model_args(mode_name)
+                for eps_i in args.eps_set:
+                    assert len(args.pixel_k_set) == len(args.lambda_set)
+                    for pixel_k, lambda_i in zip(args.pixel_k_set, args.lambda_set):
+                        success_rate_list, time_list, confidence_list, noise_norm0_list, noise_norm1_list, noise_norm2_list, noise_norm_inf_list \
+                            = attack_one_model(
+                            model=model,
+                            test_loader=test_loader,
+                            test_loader_size=test_dataset_size,
+                            num_classes=num_classes,
+                            attack_set=args.attack_set,
+                            N=args.attack_N,
+                            eps=eps_i,
+                            trade_off_c=args.trade_off_c,
+                            pixel_k=pixel_k,
+                            lambda_i=lambda_i,
+                            attri_method=attri_i
+                        )
+                        success_rate, time, confidence, norm0, norm1, norm2, norm_inf = success_rate_list.cpu().numpy().tolist(), \
+                            time_list.cpu().numpy().tolist(), \
+                            confidence_list.cpu().numpy().tolist(), \
+                            noise_norm0_list.cpu().numpy().tolist(), \
+                            noise_norm1_list.cpu().numpy().tolist(), \
+                            noise_norm2_list.cpu().numpy().tolist(), \
+                            noise_norm_inf_list.cpu().numpy().tolist()
+                        for i in range(len(success_rate_list)):
+                            res_data.append(
+                                [attri_i, args.dataset, mode_name, args.attack_set[i], args.attack_N, args.trade_off_c,
+                                 eps_i, "%d|%.2f" % (pixel_k, lambda_i),
+                                 success_rate[i], confidence[i], norm0[i], norm1[i], norm2[i], norm_inf[i], time[i]])
 
-def attack_many_model(args):
-    import datetime
-    # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    res_data = [
-        ['attri_method_set', 'dataset', 'mode_name', 'attack_method', 'attack_num', 'constant c', 'eps_i',
-         'pixel_k|lambda',
-         'attack_success', 'confidence', 'noise_norm0', 'noise_norm1', 'noise_norm2',
-         'noise_norm_inf', 'time(ms)']]
-    for attri_i in args.attri_method_set:
-        test_loader, test_dataset_size, num_classes = load_dataset(args.dataset, args.batch_size, is_shuffle=True)
-        for mode_name in args.model_name_set:
-            model, model_acc = load_model_args(mode_name)
-            for eps_i in args.eps_set:
-                assert len(args.pixel_k_set) == len(args.lambda_set)
-                for pixel_k, lambda_i in zip(args.pixel_k_set, args.lambda_set):
-                    success_rate_list, time_list, confidence_list, noise_norm0_list, noise_norm1_list, noise_norm2_list, noise_norm_inf_list \
-                        = attack_one_model(
-                        model=model,
-                        test_loader=test_loader,
-                        test_loader_size=test_dataset_size,
-                        num_classes=num_classes,
-                        attack_set=args.attack_set,
-                        N=args.attack_N,
-                        eps=eps_i,
-                        trade_off_c=args.trade_off_c,
-                        pixel_k=pixel_k,
-                        lambda_i=lambda_i,
-                        attri_method=attri_i
-                    )
-                    success_rate, time, confidence, norm0, norm1, norm2, norm_inf = success_rate_list.cpu().numpy().tolist(), \
-                        time_list.cpu().numpy().tolist(), \
-                        confidence_list.cpu().numpy().tolist(), \
-                        noise_norm0_list.cpu().numpy().tolist(), \
-                        noise_norm1_list.cpu().numpy().tolist(), \
-                        noise_norm2_list.cpu().numpy().tolist(), \
-                        noise_norm_inf_list.cpu().numpy().tolist()
-                    for i in range(len(success_rate_list)):
-                        res_data.append(
-                            [attri_i, args.dataset, mode_name, args.attack_set[i], args.attack_N, args.trade_off_c,
-                             eps_i, "%d|%.2f" % (pixel_k, lambda_i),
-                             success_rate[i], confidence[i], norm0[i], norm1[i], norm2[i], norm_inf[i], time[i]])
+            current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+            job_name = '%s_%s_iter200_trad_c%s' % (args.dataset, args.attack_N, args.trade_off_c)
+            with open('./Checkpoint/%s_%s.pkl' % (job_name, current_time), 'wb') as f:
+                pickle.dump(res_data, f)
+            import pandas as pd
+            csv = pd.DataFrame(columns=res_data[0], data=res_data[1:])
+            csv.to_csv('./Checkpoint/%s_%s.csv' % (job_name, current_time))
+            print(csv)
 
-        current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-        job_name = '%s_%s_iter200_trad_c%s' % (args.dataset, args.attack_N, args.trade_off_c)
-        with open('./Checkpoint/%s_%s.pkl' % (job_name, current_time), 'wb') as f:
-            pickle.dump(res_data, f)
-        import pandas as pd
-        csv = pd.DataFrame(columns=res_data[0], data=res_data[1:])
-        csv.to_csv('./Checkpoint/%s_%s.csv' % (job_name, current_time))
-        print(csv)
+        # with open('%s.pkl' % ('pkl'), 'rb') as f:
+        #     basic_info = pickle.load(f)
 
-    # with open('%s.pkl' % ('pkl'), 'rb') as f:
-    #     basic_info = pickle.load(f)
+    if __name__ == '__main__':
+        import os
 
+        os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+        # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-if __name__ == '__main__':
-    import os
+        from pylab import mpl
+        import random
 
-    os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+        # matplotlib.use('agg')
+        # matplotlib.get_backend()
+        mpl.rcParams['font.sans-serif'] = ['Times New Roman']
+        # mpl.rcParams['font.sans-serif'] = ['Arial']
+        # mpl.rcParams['backend'] = 'agg'
+        # mpl.rcParams["font.size"] = 12
+        mpl.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
+        # mpl.rcParams['savefig.dpi'] = 400  # 保存图片分辨率
+        mpl.rcParams['figure.constrained_layout.use'] = True
+        plt.rcParams['xtick.direction'] = 'in'  # 将x周的刻度线方向设置向内
+        plt.rcParams['ytick.direction'] = 'in'  # 将y轴的刻度方向设置向内
 
-    from pylab import mpl
-    import random
+        # if torch.cuda.is_available():
+        #     torch.backends.cudnn.benchmark = True
 
-    # matplotlib.use('agg')
-    # matplotlib.get_backend()
-    mpl.rcParams['font.sans-serif'] = ['Times New Roman']
-    # mpl.rcParams['font.sans-serif'] = ['Arial']
-    # mpl.rcParams['backend'] = 'agg'
-    # mpl.rcParams["font.size"] = 12
-    mpl.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
-    # mpl.rcParams['savefig.dpi'] = 400  # 保存图片分辨率
-    mpl.rcParams['figure.constrained_layout.use'] = True
-    plt.rcParams['xtick.direction'] = 'in'  # 将x周的刻度线方向设置向内
-    plt.rcParams['ytick.direction'] = 'in'  # 将y轴的刻度方向设置向内
+        # 生成随机数，以便固定后续随机数，方便复现代码
+        random.seed(123)
+        # 没有使用GPU的时候设置的固定生成的随机数
+        np.random.seed(123)
+        # 为CPU设置种子用于生成随机数，以使得结果是确定的
+        torch.manual_seed(123)
+        # torch.cuda.manual_seed()为当前GPU设置随机种子
+        torch.cuda.manual_seed(123)
 
-    # if torch.cuda.is_available():
-    #     torch.backends.cudnn.benchmark = True
+        # mnist_model_name_set = []
+        # 'ImageNet',
+        cifar10_model_name_set = ['NiN_CIFAR10', ]  # 'Res20_CIFAR10'
+        imagenet_model_name_set = ['ResNet34_ImageNet', ]
+        # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
+        # imagenet_model_name_set
 
-    # 生成随机数，以便固定后续随机数，方便复现代码
-    random.seed(123)
-    # 没有使用GPU的时候设置的固定生成的随机数
-    np.random.seed(123)
-    # 为CPU设置种子用于生成随机数，以使得结果是确定的
-    torch.manual_seed(123)
-    # torch.cuda.manual_seed()为当前GPU设置随机种子
-    torch.cuda.manual_seed(123)
+        import argparse
 
-    # mnist_model_name_set = []
-    # 'ImageNet',
-    cifar10_model_name_set = ['NiN_CIFAR10', ] # 'Res20_CIFAR10'
-    imagenet_model_name_set = ['ResNet34_ImageNet', ]
-    # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
-    # imagenet_model_name_set
+        parser = argparse.ArgumentParser(description='attack model')
 
-    import argparse
+        parser.add_argument('-attack_N', type=int, default=1000)
+        parser.add_argument('-dataset', type=str, default='CIFAR10')
+        parser.add_argument('-model_name_set', type=str, default=cifar10_model_name_set, nargs='+')
+        parser.add_argument('-attack_set', type=str, default=[
+            # 'LP-BFGS+CW',
+            'LP-BFGS+CE',
+            # 'LP-BFGS+CW LOG',
+            # 'FGSM',
+            # 'CW',
+            # 'SparseFool',
+            # 'JSMA'
+        ], nargs='+')
+        parser.add_argument('-lambda_set', type=float, default=[
+            1.0,
+            # 1.6, 2.4, 3.2, 4.0
+        ], nargs='+')
 
-    parser = argparse.ArgumentParser(description='attack model')
+        parser.add_argument('-pixel_k_set', type=int, default=[
+            20,
+            # 40, 60, 80, 100
+            # 50,
+            # 75,
+            # 20,
+            # 40,
+            # 60,
+            # 80,
+            # 100,
+            # 150,
+            # 175,
+            # 200,
+            # 300,
+            # 400,
+            # # 700,
+            # 1000
+        ], nargs='+')
 
-    parser.add_argument('-attack_N', type=int, default=1000)
-    parser.add_argument('-dataset', type=str, default='CIFAR10')
-    parser.add_argument('-model_name_set', type=str, default=cifar10_model_name_set, nargs='+')
-    parser.add_argument('-attack_set', type=str, default=[
-        'LP-BFGS+CW',
-        'LP-BFGS+CE',
-        'LP-BFGS+CW LOG',
-        'FGSM',
-        'CW',
-        'SparseFool',
-        'JSMA'
-    ], nargs='+')
-    parser.add_argument('-lambda_set', type=float, default=[
-        1.0, 1.6, 2.4, 3.2, 4.0
-    ], nargs='+')
+        parser.add_argument('-batch_size', type=int, default=1)
+        parser.add_argument('-eps_set', type=float, default=[1.0], nargs='+')
+        parser.add_argument('-trade_off_c', type=float, default=1e3)
+        parser.add_argument('-attri_method_set', type=str, default=[
+            'IG',
+            # 'DeepLIFT',
+            # 'Random',
+        ], nargs='+')
 
-    parser.add_argument('-pixel_k_set', type=int, default=[
-        25, 40, 60, 80, 100
-        # 50,
-        # 75,
-        # 20,
-        # 40,
-        # 60,
-        # 80,
-        # 100,
-        # 150,
-        # 175,
-        # 200,
-        # 300,
-        # 400,
-        # # 700,
-        # 1000
-    ], nargs='+')
+        args = parser.parse_args()
 
-    parser.add_argument('-batch_size', type=int, default=1)
-    parser.add_argument('-eps_set', type=float, default=[1.0], nargs='+')
-    parser.add_argument('-trade_off_c', type=float, default=1e3)
-    parser.add_argument('-attri_method_set', type=str, default=[
-        'IG',
-        # 'DeepLIFT',
-        # 'Random',
-    ], nargs='+')
+        # from torch import autograd
+        # with autograd.detect_anomaly():
+        # with torch.autograd.profiler.profile(enabled=True) as prof:
+        attack_many_model(args)
+        print('aaa')
 
-    args = parser.parse_args()
-
-    # from torch import autograd
-    # with autograd.detect_anomaly():
-    # with torch.autograd.profiler.profile(enabled=True) as prof:
-    attack_many_model(args)
-
-    print("ALL WORK HAVE BEEN DONE!!!")
+        print("ALL WORK HAVE BEEN DONE!!!")

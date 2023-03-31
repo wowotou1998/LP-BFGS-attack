@@ -168,4 +168,4 @@ def pixel_selector_by_attribution(model, images, labels, pixel_k, attri_method):
     # A is a matrix, size is n*k
     # KP is a matrix, size is k*1
     # RP is a matrix, size is n*1
-    return idx, A, KP, RP
+    return attributions_abs, idx, A, KP, RP
