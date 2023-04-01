@@ -20,7 +20,7 @@ from attack_method_self_defined import LP_FGSM, LP_CW, JSMA
 from torchattacks import SparseFool
 from prefetch_generator import BackgroundGenerator
 # from advertorch.attacks import JSMA
-
+from captum.attr import visualization as viz
 import pickle
 
 import numpy as np
@@ -418,7 +418,7 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
 def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_set, N, eps, trade_off_c, pixel_k,
                      lambda_i,
                      attri_method,
-                     SHOW=True):
+                     PLOT_ADV=True):
     cifar_label = {0: "airplane", 1: "car", 2: "bird", 3: "cat", 4: "deer",
                    5: "dog", 6: "frog", 7: "horse", 8: "ship", 9: "truck"}
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
@@ -450,6 +450,9 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
     model.eval()
 
     for data in test_loader:
+        epoch_num += 1
+        if epoch_num >= N:
+            break
         # train_loader is a class, DataSet is a list(length is 2,2 tensors) ,images is a tensor,labels is a tensor
         # images is consisted by 64 tensor, so we will get the 64 * 10 matrix. labels is a 64*1 matrix, like a vector.
         images, labels = data
@@ -458,11 +461,10 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
         images.requires_grad_(True)
 
         batch_num = labels.shape[0]
-        epoch_num += 1
         sample_num += batch_num
         pbar.update(batch_num)
-        # if epoch_num < 299:
-        #     continue
+        if epoch_num < 9:
+            continue
 
         # if batch_num > 10000:
         #     break
@@ -492,7 +494,7 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
         acc_num_before_attack += predict_answer.sum().item()
         # 统计神经网络分类正确的样本的个数总和
         # valid_attack_num += labels.shape[0]
-        if SHOW:
+        if PLOT_ADV:
             plot_images = images.detach().clone()
             plot_titles = ['Original: ' + str(labels[0].item())]
         for idx, attack_i in enumerate(attack_set):
@@ -536,106 +538,85 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
             noise_norm1_total[idx] += valid_noise_norm1.sum().item()
             noise_norm2_total[idx] += valid_noise_norm2.sum().item()
             noise_norm_inf_total[idx] += valid_noise_norm_inf.sum().item()
-            if SHOW:
+            if PLOT_ADV:
                 plot_images = torch.cat([plot_images, images_under_attack.clone().detach()], dim=0)
                 plot_titles += [attack_i + ': ' + str(predict[0].item())]
-            if acc_num_before_attack == 1:
+            if True:
                 pass
 
                 # -------- plot attribution score--------
-                # shape = images.shape
-                # A = torch.zeros(size=(images.numel(), pixel_k), device=images.device, dtype=torch.float)
-                # # KP = torch.zeros(k, device=images.device, dtype=torch.float)
-                # # 找到矩阵A, 满足 image = A*KP+RP, A:n*k; KP:k*1; C:n*1
-                # idx, attributions_abs = (model, images, labels, pixel_k)
-                # attr_min, attr_max = attributions_abs.min().item(), attributions_abs.max().item()
-                # attributions_abs_img = (attributions_abs - attr_min) / \
-                #                        (attr_max - attr_min)
-                #
-                # KP = images.detach().clone().flatten()[idx].view(-1, 1)
-                #
-                # for i in range(pixel_k):
-                #     # 第 idx[i] 行第 i列 的元素置为 1
-                #     # idx保存了对最终决策有重要作用的像素点的下标，
-                #     A[idx[i].item()][i] = 1
-                # A_KP = A.mm(KP)
-                # RP = images.detach().clone().flatten().view(-1, 1) - A_KP
-                #
-                # fig, axes = plt.subplots(1, 6, figsize=(2 * 6, 2))
-                # for i in range(6):
-                #     axes[i].set_xticks([])
-                #     axes[i].set_yticks([])
-                #
-                # image = images[0].cpu().detach().numpy().transpose(1, 2, 0)
-                # axes[0].imshow(image, cmap='gray')
-                # axes[0].set_title('origin')
-                #
-                # image = attributions_abs_img[0].cpu().detach().numpy().transpose(1, 2, 0)
-                # axes[1].imshow(image, cmap='coolwarm')
-                # axes[1].set_title('attribution heatmap')
-                # # add color bar
+                shape = images.shape
+                attr_min, attr_max = attribution_abs.min().item(), attribution_abs.max().item()
+                attributions_abs_img = (attribution_abs - attr_min) / \
+                                       (attr_max - attr_min)
+                A_KP = A.mm(KP)
+                fig, axes = plt.subplots(1, 6, figsize=(2 * 6, 2))
+                for i in range(6):
+                    axes[i].set_xticks([])
+                    axes[i].set_yticks([])
+
+                image = images[0].cpu().detach().numpy().transpose(1, 2, 0)
+                axes[0].imshow(image)
+                axes[0].set_title('Original')
+
+                image = attributions_abs_img[0].cpu().detach().numpy().transpose(1, 2, 0)
+                axes[1].imshow(image)
+                axes[1].set_title('Attribution magnitude')
+                # add color bar
                 # s_cmap_std = plt.cm.ScalarMappable(cmap='coolwarm', norm=plt.Normalize(vmin=attr_min, vmax=attr_max))
                 # fig.colorbar(s_cmap_std, ax=axes[1], ticks=[attr_min, 0.5 * (attr_max - attr_min), attr_max])
-                #
-                # A_KP_img_0 = A_KP.reshape(shape)[0].cpu().detach().numpy().transpose(1, 2, 0)
-                # axes[2].imshow(A_KP_img_0, cmap='gray')
-                # axes[2].set_title('important k pixels')
-                #
-                # RP_img = RP.reshape(shape)
-                # RP_img_0 = RP_img[0].cpu().detach().numpy().transpose(1, 2, 0)
-                # axes[3].imshow(RP_img_0, cmap='gray')
-                # axes[3].set_title('the rest pixels')
-                #
-                # adv_KP = images_under_attack-RP_img
-                # image = adv_KP[0].cpu().detach().numpy().transpose(1, 2, 0)
-                # axes[4].imshow(image, cmap='gray')
-                # axes[4].set_title('adv k pixels')
-                #
-                #
-                # image = images_under_attack[0].cpu().detach().numpy().transpose(1, 2, 0)
-                # axes[5].imshow(image, cmap='gray')
-                # axes[5].set_title('attacked image')
-                # plt.show(block=True)
-                # fig.savefig('pixel_selecor2.pdf')
+
+                A_KP_img_0 = A_KP.reshape(shape)[0].cpu().detach().numpy().transpose(1, 2, 0)
+                axes[2].imshow(A_KP_img_0)
+                axes[2].set_title('Pixels with high attribution')
+
+                RP_img = RP.reshape(shape)
+                RP_img_0 = RP_img[0].cpu().detach().numpy().transpose(1, 2, 0)
+                axes[3].imshow(RP_img_0)
+                axes[3].set_title('Immutable pixels')
+
+                adv_KP = images_under_attack - RP_img
+                image = adv_KP[0].cpu().detach().numpy().transpose(1, 2, 0)
+                axes[4].imshow(image)
+                axes[4].set_title('Perturbation')
+
+                image = images_under_attack[0].cpu().detach().numpy().transpose(1, 2, 0)
+                axes[5].imshow(image)
+                axes[5].set_title('Adversarial image')
+                plt.show(block=True)
+                fig.savefig('pixel_selecor2.pdf')
                 # -------- plot attribution score --------
 
-            # brea
-        if SHOW:
+        if PLOT_ADV:
             # show adv images
             show_images(plot_images, plot_titles)
-            # show noise
-            show_images(noise_o.view(images.shape), ['noise'])
-            #     show important pixels
-            attri_visual = attribution_abs[attribution_abs == 0.] = 128
-            show_images(attri_visual, plot_titles)
-            if epoch_num >= N:
-                break
-        print('attack_success_num', attack_success_num)
-        # print('confidence_total', confidence_total)
-        attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
-        # attack_success_num[attack_success_num == 0] = float('inf'), 防止出现除 0 溢出 inf
-        no_zero_index = attack_success_num != 0
-        time_ave[no_zero_index] = (time_total[no_zero_index] / attack_success_num[no_zero_index]) * 1000.
-        confidence_ave[no_zero_index] = (confidence_total[no_zero_index] / attack_success_num[no_zero_index])
-        noise_norm0_ave[no_zero_index] = (noise_norm0_total[no_zero_index] / attack_success_num[no_zero_index])
-        noise_norm1_ave[no_zero_index] = (noise_norm1_total[no_zero_index] / attack_success_num[no_zero_index])
-        noise_norm2_ave[no_zero_index] = (noise_norm2_total[no_zero_index] / attack_success_num[no_zero_index])
-        noise_norm_inf_ave[no_zero_index] = (noise_norm_inf_total[no_zero_index] / attack_success_num[no_zero_index])
-        pbar.close()
-        print('model acc %.2f' % (acc_num_before_attack / sample_num))
-        for i in range(len(attack_set)):
-            print(
-                'eps=%.2f, pixel_k=%d, lambda=%.2f, %s ASR=%.2f%%,time=%.2f(ms) confidence=%.2f, norm(0)=%.2f,norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
-                    eps, pixel_k, lambda_i,
-                    attack_set[i],
-                    attack_success_rate[i],
-                    time_ave[i],
-                    confidence_ave[i],
-                    noise_norm0_ave[i],
-                    noise_norm1_ave[i],
-                    noise_norm2_ave[i],
-                    noise_norm_inf_ave[i]))
-        return attack_success_rate, time_ave, confidence_ave, noise_norm0_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
+
+    print('attack_success_num', attack_success_num)
+    # print('confidence_total', confidence_total)
+    attack_success_rate = (attack_success_num / acc_num_before_attack) * 100
+    # attack_success_num[attack_success_num == 0] = float('inf'), 防止出现除 0 溢出 inf
+    no_zero_index = attack_success_num != 0
+    time_ave[no_zero_index] = (time_total[no_zero_index] / attack_success_num[no_zero_index]) * 1000.
+    confidence_ave[no_zero_index] = (confidence_total[no_zero_index] / attack_success_num[no_zero_index])
+    noise_norm0_ave[no_zero_index] = (noise_norm0_total[no_zero_index] / attack_success_num[no_zero_index])
+    noise_norm1_ave[no_zero_index] = (noise_norm1_total[no_zero_index] / attack_success_num[no_zero_index])
+    noise_norm2_ave[no_zero_index] = (noise_norm2_total[no_zero_index] / attack_success_num[no_zero_index])
+    noise_norm_inf_ave[no_zero_index] = (noise_norm_inf_total[no_zero_index] / attack_success_num[no_zero_index])
+    pbar.close()
+    print('model acc %.2f' % (acc_num_before_attack / sample_num))
+    for i in range(len(attack_set)):
+        print(
+            'eps=%.2f, pixel_k=%d, lambda=%.2f, %s ASR=%.2f%%,time=%.2f(ms) confidence=%.2f, norm(0)=%.2f,norm(1)=%.2f,norm(2)=%.2f, norm(inf)=%.2f' % (
+                eps, pixel_k, lambda_i,
+                attack_set[i],
+                attack_success_rate[i],
+                time_ave[i],
+                confidence_ave[i],
+                noise_norm0_ave[i],
+                noise_norm1_ave[i],
+                noise_norm2_ave[i],
+                noise_norm_inf_ave[i]))
+    return attack_success_rate, time_ave, confidence_ave, noise_norm0_ave, noise_norm1_ave, noise_norm2_ave, noise_norm_inf_ave
 
 
 def attack_many_model(args):
@@ -738,8 +719,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='attack model')
 
     parser.add_argument('-attack_N', type=int, default=1000)
-    parser.add_argument('-dataset', type=str, default='CIFAR10')
-    parser.add_argument('-model_name_set', type=str, default=cifar10_model_name_set, nargs='+')
+    parser.add_argument('-dataset', type=str, default='ImageNet')  # 'CIFAR10', 'ImageNet'
+    parser.add_argument('-model_name_set', type=str,
+                        default=imagenet_model_name_set,
+                        nargs='+')
     parser.add_argument('-attack_set', type=str, default=[
         # 'LP-BFGS+CW',
         'LP-BFGS+CE',
@@ -755,7 +738,7 @@ if __name__ == '__main__':
     ], nargs='+')
 
     parser.add_argument('-pixel_k_set', type=int, default=[
-        20,
+        # 20,
         # 40, 60, 80, 100
         # 50,
         # 75,
@@ -768,7 +751,7 @@ if __name__ == '__main__':
         # 175,
         # 200,
         # 300,
-        # 400,
+        400,
         # # 700,
         # 1000
     ], nargs='+')
@@ -782,7 +765,6 @@ if __name__ == '__main__':
         # 'Random',
     ], nargs='+')
 
-    print('aaa')
     args = parser.parse_args()
 
     # from torch import autograd
