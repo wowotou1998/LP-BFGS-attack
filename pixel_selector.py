@@ -30,7 +30,7 @@ def box2inf(x):
     return torch.atanh(2.0 * x - 1.)
 
 
-def pixel_attribution_sort(model, images, labels, pixel_k, attri_method, FIND_MAX=True, ):
+def pixel_attribution_sort(model, images, labels, pixel_k, attri_method, FIND_MAX=False):
     # Only output the
     n = images.numel()
     k = pixel_k

@@ -204,7 +204,7 @@ def plot_loss_3d(image, label, model):
     ax2.set_zlim((y_min, y_max))
     ax2.view_init(30, 45)
     ax2.set_title(r'Space spanned by pixel $x_3,x_4$ ')
-    cbar = subfigs[0].colorbar(sm, shrink=0.45, ax=[ax1, ax2], label='CE loss', location='bottom')
+    cbar = subfigs[0].colorbar(sm, shrink=0.45, ax=[ax1, ax2], label='Cross entropy loss', location='bottom')
     cbar.formatter.set_powerlimits((0, 0))  # 设置colorbar为科学计数法
     cbar.update_ticks()
 
@@ -226,8 +226,8 @@ def plot_loss_3d(image, label, model):
         else:
             ax.imshow(image[0].cpu().detach().numpy().transpose(1, 2, 0))
 
-    subfigs[1].colorbar(sm2, shrink=0.8, ax=axsRight, label='Attribution Score', location='bottom')
-    subfigs[1].suptitle('Attribution score in different channel')
+    subfigs[1].colorbar(sm2, shrink=0.8, ax=axsRight, label='Attribution magnitude', location='bottom')
+    subfigs[1].suptitle('Attribution magnitude in different channel')
     # ---------------------annotate the perturbed pixels
     x1_x2 = find_pixel_loc(shape=image.shape, pixel_idx=pixel_idx)
     print(x1_x2)

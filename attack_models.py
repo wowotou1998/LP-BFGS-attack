@@ -137,16 +137,16 @@ def load_model_args(model_name):
         model = ptcv_get_model("vgg19", pretrained=True, root='../Checkpoint')
         # model = torchvision.models.vgg19(pretrained=True, )
         return model, 76.130
-    elif model_name == 'ResNet34_ImageNet':
+    elif model_name == 'Res34_ImageNet':
         model = ptcv_get_model("resnet34", pretrained=True, root='../Checkpoint')
         return model, 100 - 26.94
-    elif model_name == 'ResNet18_ImageNet':
+    elif model_name == 'Res18_ImageNet':
         model = ptcv_get_model("resnet18", pretrained=True, root='../Checkpoint')
         return model, 76.130
-    elif model_name == 'ResNet101_ImageNet':
+    elif model_name == 'Res101_ImageNet':
         model = ptcv_get_model("resnet101", pretrained=True, root='../Checkpoint')
         return model, 76.130
-    elif model_name == 'DenseNet121_ImageNet':
+    elif model_name == 'Dense121_ImageNet':
         model = ptcv_get_model("densenet121", pretrained=True, root='../Checkpoint')
         # model = torchvision.models.densenet121(pretrained=True)
         return model, 100 - 21.91
@@ -418,7 +418,7 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
 def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_set, N, eps, trade_off_c, pixel_k,
                      lambda_i,
                      attri_method,
-                     PLOT_ADV=True):
+                     PLOT_ADV=False, PLOT_IG=False):
     cifar_label = {0: "airplane", 1: "car", 2: "bird", 3: "cat", 4: "deer",
                    5: "dog", 6: "frog", 7: "horse", 8: "ship", 9: "truck"}
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
@@ -463,8 +463,8 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
         batch_num = labels.shape[0]
         sample_num += batch_num
         pbar.update(batch_num)
-        if epoch_num < 9:
-            continue
+        # if epoch_num < 9:
+        #     continue
 
         # if batch_num > 10000:
         #     break
@@ -541,9 +541,13 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
             if PLOT_ADV:
                 plot_images = torch.cat([plot_images, images_under_attack.clone().detach()], dim=0)
                 plot_titles += [attack_i + ': ' + str(predict[0].item())]
-            if True:
-                pass
-
+            if PLOT_IG:
+                _ = viz.visualize_image_attr_multiple(attribution_abs[0].cpu().detach().numpy().transpose(1, 2, 0),
+                                                      images[0].cpu().detach().numpy().transpose(1, 2, 0),
+                                                      methods=['heat_map', 'blended_heat_map', 'original_image',
+                                                               'masked_image', 'alpha_scaling'],
+                                                      signs=['absolute_value'] * 5,
+                                                      titles=['IG'] * 5)
                 # -------- plot attribution score--------
                 shape = images.shape
                 attr_min, attr_max = attribution_abs.min().item(), attribution_abs.max().item()
@@ -568,7 +572,7 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
 
                 A_KP_img_0 = A_KP.reshape(shape)[0].cpu().detach().numpy().transpose(1, 2, 0)
                 axes[2].imshow(A_KP_img_0)
-                axes[2].set_title('Pixels with high attribution')
+                axes[2].set_title('Pixels will be perturbed')
 
                 RP_img = RP.reshape(shape)
                 RP_img_0 = RP_img[0].cpu().detach().numpy().transpose(1, 2, 0)
@@ -710,8 +714,8 @@ if __name__ == '__main__':
     # mnist_model_name_set = []
     # 'ImageNet',
     cifar10_model_name_set = ['NiN_CIFAR10', ]  # 'Res20_CIFAR10'
-    imagenet_model_name_set = ['ResNet34_ImageNet', ]
-    # 'DenseNet161_ImageNet','ResNet34_ImageNet', 'DenseNet121_ImageNet VGG19_ImageNet
+    imagenet_model_name_set = ['Res34_ImageNet', ]
+    # 'DenseNet161_ImageNet','Res34_ImageNet', 'Dense121_ImageNet VGG19_ImageNet
     # imagenet_model_name_set
 
     import argparse
@@ -724,17 +728,18 @@ if __name__ == '__main__':
                         default=imagenet_model_name_set,
                         nargs='+')
     parser.add_argument('-attack_set', type=str, default=[
-        # 'LP-BFGS+CW',
+        'LP-BFGS+CW',
         'LP-BFGS+CE',
-        # 'LP-BFGS+CW LOG',
-        # 'FGSM',
-        # 'CW',
+        'LP-BFGS+CW LOG',
+        'FGSM',
+        'CW',
         # 'SparseFool',
         # 'JSMA'
     ], nargs='+')
     parser.add_argument('-lambda_set', type=float, default=[
         1.0,
-        # 1.6, 2.4, 3.2, 4.0
+        1.6, 2.4,
+        # 3.2, 4.0
     ], nargs='+')
 
     parser.add_argument('-pixel_k_set', type=int, default=[
@@ -743,7 +748,7 @@ if __name__ == '__main__':
         # 50,
         # 75,
         # 20,
-        # 40,
+        40,
         # 60,
         # 80,
         # 100,
@@ -753,7 +758,7 @@ if __name__ == '__main__':
         # 300,
         400,
         # # 700,
-        # 1000
+        1000
     ], nargs='+')
 
     parser.add_argument('-batch_size', type=int, default=1)
