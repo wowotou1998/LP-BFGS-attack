@@ -20,7 +20,10 @@ from captum.attr import IntegratedGradients
 from captum.attr import Saliency
 from captum.attr import DeepLift
 from captum.attr import NoiseTunnel
-from captum.attr import visualization as viz
+
+from torchcam.methods import GradCAM, LayerCAM
+from torchcam.utils import overlay_mask
+from torchvision.transforms.functional import to_pil_image
 
 
 # 相似性范围从-1到1：
@@ -63,13 +66,62 @@ def attribute_image_features(net, algorithm, input, label, **kwargs):
 
 
 def plot_attributions(net, image, label):
+    def norm(attribution_abs):
+        attr_min, attr_max = attribution_abs.min().item(), attribution_abs.max().item()
+        attributions_abs_img = (attribution_abs - attr_min) / \
+                               (attr_max - attr_min)
+        return attributions_abs_img[0].cpu().detach().numpy().transpose(1, 2, 0)
+
     saliency = Saliency(net)
     NT = NoiseTunnel(saliency)
     IG = IntegratedGradients(net)
     s1 = attribute_image_features(net, saliency, image, label)  # labels[0].item()
     s2 = attribute_image_features(net, NT, image, label, nt_type='smoothgrad', nt_samples=100, stdevs=0.2)
     s3 = attribute_image_features(net, IG, image, label, baselines=images * 0, )
-    grads = np.transpose(s1.squeeze().cpu().detach().numpy(), (1, 2, 0))
+
+    cam = GradCAM(model, 'features.stage4')
+    scores = model(image)
+    activation_map = cam(class_idx=label, scores=scores)
+    s4 = overlay_mask(to_pil_image(image[0]), to_pil_image(activation_map[0].squeeze(0), mode='F'), alpha=0.5)
+
+    extractor = LayerCAM(model, ['features.stage1', 'features.stage2', 'features.stage3', 'features.stage4'])
+    scores = model(image)
+    cams = extractor(class_idx=label, scores=scores)
+    fused_cam = extractor.fuse_cams(cams)
+
+    s5 = overlay_mask(to_pil_image(image[0]), to_pil_image(fused_cam[0].squeeze(0), mode='F'), alpha=0.5)
+
+    num = 6
+    fig, axes = plt.subplots(1, num, figsize=(2 * num, 2))
+    for i in range(num):
+        axes[i].set_xticks([])
+        axes[i].set_yticks([])
+
+    axes[0].imshow(image[0].cpu().detach().numpy().transpose(1, 2, 0))
+    axes[0].set_title('Original')
+
+    axes[1].imshow(norm(torch.abs(s1)))
+    axes[1].set_title('Saliency map')
+    # add color bar
+    # s_cmap_std = plt.cm.ScalarMappable(cmap='coolwarm', norm=plt.Normalize(vmin=attr_min, vmax=attr_max))
+    # fig.colorbar(s_cmap_std, ax=axes[1], ticks=[attr_min, 0.5 * (attr_max - attr_min), attr_max])
+
+    axes[2].imshow(norm(torch.abs(s2)))
+    axes[2].set_title('SmoothGrad')
+
+    axes[3].imshow(norm(torch.abs(s3)))
+    axes[3].set_title('Integrated Gradient')
+
+    axes[4].imshow(s4)
+    axes[4].set_title('GradCAM')
+
+    axes[5].imshow(s5)
+    axes[5].set_title('LayerCAM')
+
+    plt.show(block=True)
+    # fig.savefig('pixel_selecor2.pdf')
+    # print(s1, s2, s3)
+    # grads = np.transpose(s1.squeeze().cpu().detach().numpy(), (1, 2, 0))
 
 
 if __name__ == '__main__':
@@ -87,19 +139,18 @@ if __name__ == '__main__':
     # plt.rcParams['ytick.direction'] = 'in'  # 将y轴的刻度方向设置向内
     # mpl.rcParams['figure.constrained_layout.use'] = True
 
-    model_name_set = ['VGG16', 'VGG19', 'ResNet50', 'ResNet101', 'DenseNet121']
-    #
-    # select_a_sample_to_plot('MNIST',
-    #                         'ResNet18_ImageNet',
-    #                         Epsilon=5 / 255,
-    #                         Iterations=10,
-    #                         Momentum=1.0)
+    # 生成随机数，以便固定后续随机数，方便复现代码
+    import random
 
-    # select_a_sample_to_plot(
-    #     'CIFAR10',
-    #     'Res20_CIFAR10'
-    # )
-    test_loader, _, _ = load_dataset('ImageNet', batch_size=1, is_shuffle=False)
+    random.seed(1234)
+    # 没有使用GPU的时候设置的固定生成的随机数
+    np.random.seed(1234)
+    # 为CPU设置种子用于生成随机数，以使得结果是确定的
+    torch.manual_seed(1234)
+    # torch.cuda.manual_seed()为当前GPU设置随机种子
+    torch.cuda.manual_seed(1234)
+
+    test_loader, _, _ = load_dataset('ImageNet', batch_size=1, is_shuffle=True)
 
     model, model_acc = load_model_args('Res34_ImageNet')
     device = torch.device("cuda:%d" % (0) if torch.cuda.is_available() else "cpu")
@@ -125,8 +176,9 @@ if __name__ == '__main__':
         labels = torch.index_select(original_labels, 0, predict_correct_index)
         if images.shape[0] > 0:
             print('correct prediction')
-            plot_attributions()
-            break
+            images.requires_grad = True
+            plot_attributions(model, images, labels[0].item())
+            # break
         else:
             print('wrong prediction')
 
