@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from minimize import minimize
 from pixel_selector import inf2box, box2inf
 from pixel_selector import pixel_selector_by_attribution
-# from attack_method_self_defined import LP_FGSM, LP_CW, JSMA
+from attack_method_self_defined import LP_FGSM, LP_CW, JSMA
 from torchattacks import SparseFool
 from prefetch_generator import BackgroundGenerator
 # from advertorch.attacks import JSMA
