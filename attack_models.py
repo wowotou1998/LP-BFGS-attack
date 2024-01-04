@@ -16,13 +16,13 @@ import torch.nn.functional as F
 from minimize import minimize
 from pixel_selector import inf2box, box2inf
 from pixel_selector import pixel_selector_by_attribution
-from attack_method_self_defined import LP_FGSM, LP_CW, JSMA
+# from attack_method_self_defined import LP_FGSM, LP_CW, JSMA
 from torchattacks import SparseFool
 from prefetch_generator import BackgroundGenerator
 # from advertorch.attacks import JSMA
 from captum.attr import visualization as viz
 import pickle
-
+from torch.profiler import profile, record_function, ProfilerActivity
 import numpy as np
 
 import torch
@@ -169,6 +169,7 @@ def load_dataset(dataset, batch_size, is_shuffle=False, pin=True):
             transforms.ToTensor(),
         ]
     )
+
     data_tf_imagenet = transforms.Compose(
         [
 
@@ -200,7 +201,7 @@ def load_dataset(dataset, batch_size, is_shuffle=False, pin=True):
         test_dataset_size = 10000
         num_classes = 10
     else:
-        raise Exception('Unknown dataset')
+        raise Exception('Unknown DataSet')
     test_loader = DataLoaderX(dataset=test_dataset, batch_size=batch_size, shuffle=is_shuffle, num_workers=2)
 
     return test_loader, test_dataset_size, num_classes
@@ -230,6 +231,7 @@ def torch_time_ticker(func):
 
 
 def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, trade_off_c, lambda_i, A, KP, RP):
+
     if attack_name == 'FGSM':
         atk = LP_FGSM(model, A, KP, RP, eps=eps)
 
@@ -369,7 +371,7 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
             torch.cuda.synchronize()
             start = time.perf_counter()
 
-            res1 = minimize(cw_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
+            res1 = minimize(cw_loss, w.detach().clone(), method='l-bfgs', max_iter=200, tol=1e-5, disp=False)
             KP_box = inf2box(res1.x)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
             # res1 = minimize(ce_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
@@ -389,7 +391,7 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
             torch.cuda.synchronize()
             start = time.perf_counter()
 
-            res1 = minimize(cw_log_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
+            res1 = minimize(cw_log_loss, w.detach().clone(), method='l-bfgs', max_iter=200, tol=1e-5, disp=False)
             KP_box = inf2box(res1.x)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -401,7 +403,7 @@ def attack_by_k_pixels(attack_name, model, images, num_classes, labels, eps, tra
             torch.cuda.synchronize()
             start = time.perf_counter()
 
-            res1 = minimize(ce_loss, w.detach().clone(), method='bfgs', max_iter=200, tol=1e-5, disp=False)
+            res1 = minimize(ce_loss, w.detach().clone(), method='l-bfgs', max_iter=200, tol=1e-5, disp=False)
             KP_box = inf2box(res1.x)
             adv_images = (A.mm(KP_box) + C0).reshape(original_shape)
 
@@ -489,6 +491,7 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
 
         # pixel_idx, attribution_abs = pixel_attribution_sort(model, images, labels, pixel_k)
         # pixel_idx, attribution_abs = pixel_saliency_sort(model, images, labels, pixel_k)
+
         attribution_abs, pixel_idx, A, KP, RP = pixel_selector_by_attribution(model, images, labels, pixel_k,
                                                                               attri_method)
         acc_num_before_attack += predict_answer.sum().item()
@@ -498,8 +501,10 @@ def attack_one_model(model, test_loader, test_loader_size, num_classes, attack_s
             plot_images = images.detach().clone()
             plot_titles = ['Original: ' + str(labels[0].item())]
         for idx, attack_i in enumerate(attack_set):
+            # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=False, profile_memory=False) as prof:
             images_under_attack, time_i = attack_by_k_pixels(attack_i, model, images, num_classes, labels, eps,
-                                                             trade_off_c, lambda_i, A, KP, RP)
+                                                         trade_off_c, lambda_i, A, KP, RP)
+            # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
             b = images_under_attack.shape[0]
             time_i = torch.as_tensor([time_i] * b, device=device).view(b, -1)
             confidence, predict = torch.max(F.softmax(model(images_under_attack), dim=1), dim=1)
@@ -627,7 +632,7 @@ def attack_many_model(args):
     import datetime
     # datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     res_data = [
-        ['attri_method_set', 'dataset', 'mode_name', 'attack_method', 'attack_num', 'constant c', 'eps_i',
+        ['attri_method_set', 'DataSet', 'mode_name', 'attack_method', 'attack_num', 'constant c', 'eps_i',
          'pixel_k|lambda',
          'attack_success', 'confidence', 'noise_norm0', 'noise_norm1', 'noise_norm2',
          'noise_norm_inf', 'time(ms)']]
@@ -713,7 +718,7 @@ if __name__ == '__main__':
 
     # mnist_model_name_set = []
     # 'ImageNet',
-    cifar10_model_name_set = ['NiN_CIFAR10', ]  # 'Res20_CIFAR10'
+    cifar10_model_name_set = ['Res20_CIFAR10']  # 'NiN_CIFAR10' Res20_CIFAR10
     imagenet_model_name_set = ['Res34_ImageNet', ]
     # 'DenseNet161_ImageNet','Res34_ImageNet', 'Dense121_ImageNet VGG19_ImageNet
     # imagenet_model_name_set
@@ -722,33 +727,35 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='attack model')
 
-    parser.add_argument('-attack_N', type=int, default=1000)
-    parser.add_argument('-dataset', type=str, default='ImageNet')  # 'CIFAR10', 'ImageNet'
+    parser.add_argument('-attack_N', type=int, default=10)
+    parser.add_argument('-dataset', type=str, default='CIFAR10')  # 'CIFAR10', 'ImageNet'
     parser.add_argument('-model_name_set', type=str,
-                        default=imagenet_model_name_set,
+                        default=cifar10_model_name_set,
                         nargs='+')
     parser.add_argument('-attack_set', type=str, default=[
         'LP-BFGS+CW',
-        'LP-BFGS+CE',
-        'LP-BFGS+CW LOG',
-        'FGSM',
-        'CW',
+        # 'LP-BFGS+CE',
+        # 'LP-BFGS+CW LOG',
+        # 'FGSM',
+        # 'CW',
+        # 'LP-L-BFGS+CW'
         # 'SparseFool',
         # 'JSMA'
     ], nargs='+')
     parser.add_argument('-lambda_set', type=float, default=[
-        1.0,
-        1.6, 2.4,
-        # 3.2, 4.0
+        # 1.0,
+        # 1.6, 2.4,
+        3.2, 4.0
     ], nargs='+')
 
     parser.add_argument('-pixel_k_set', type=int, default=[
         # 20,
-        # 40, 60, 80, 100
+        # 40, 60,
+        80, 100,
         # 50,
         # 75,
         # 20,
-        40,
+        # 40,
         # 60,
         # 80,
         # 100,
@@ -756,9 +763,9 @@ if __name__ == '__main__':
         # 175,
         # 200,
         # 300,
-        400,
+        # 400,
         # # 700,
-        1000
+        # 1000
     ], nargs='+')
 
     parser.add_argument('-batch_size', type=int, default=1)
